@@ -8,7 +8,7 @@ description: Fresh verification evidence for the additive evaluation milestone
 
 Date: 2026-09-11  
 Feature slug: `stellar-launch`  
-Status: pending fresh execution
+Status: fresh local execution in progress; hosted evidence pending
 
 Only commands run in the clean Level 4 worktree may be recorded here. Donor
 claims, development screenshots, and stale lockfile results are excluded.
@@ -17,7 +17,7 @@ claims, development screenshots, and stale lockfile results are excluded.
 
 | Area | Command | Result |
 |---|---|---|
-| AI DevKit lint | `npx ai-devkit@latest lint --feature stellar-launch` | pending |
+| AI DevKit lint | `npx ai-devkit@latest lint --feature stellar-launch` | pending (CLI probe reported unknown command in this environment) |
 | Gateway | `cd ts && npm run typecheck` | pass (T1; shared package built first) |
 | Gateway tests | `cd ts && npm test` | pending |
 | Web tests/types/build/E2E | `cd web && npm test`, typecheck, build, E2E | pending |
@@ -25,7 +25,7 @@ claims, development screenshots, and stale lockfile results are excluded.
 | Fee sponsor | typecheck/tests | pending |
 | Circuits | circuit test suite | pending |
 | Soroban contract | `cargo test` | pending/toolchain-dependent |
-| Synthetic monitor | `node --check scripts/synthetic-monitor.mjs` | pending |
+| Synthetic monitor | `node --test scripts/level4-synthetic.test.mjs`; `node --check scripts/level4-synthetic.mjs` | pass (3 tests) |
 | Whitespace | `git diff --check` | pending |
 
 ## T1 narrow evidence
@@ -66,6 +66,31 @@ implemented. No external deployment or cohort evidence is claimed.
 | Consent-gated evaluation checkout and launch starter regression | `cd web && npm test -- --run src/app/api/checkout/route.test.ts` | pass (3 tests) |
 | Filtered Stripe relay payloads and receipt ownership | `cd web && npm test -- --run src/lib/stripe-relay.test.ts src/lib/evaluation-receipt.test.ts src/app/api/checkout/receipt/route.test.ts` | pass (6 tests) |
 | Web route type safety | `cd web && npm run typecheck` | pass |
+
+## T6 narrow evidence
+
+| Behavior | Command | Result |
+|---|---|---|
+| Opt-in-only PostHog initialization, event/property allowlist, duration clamping, and logout reset | `cd web && npm test -- --run src/lib/analytics.test.ts src/components/analytics-session-reset.test.ts` | pass (5 tests) |
+| Recursive browser Sentry scrub, including nested arrays and bounded depth | `cd web && npm test -- --run src/lib/sentry-scrub.test.ts` | pass (2 tests) |
+| Explicit analytics opt-in route and evaluation route regression | `cd web && npm test -- --run src/app/api/evaluation/analytics/route.test.ts src/app/api/evaluation/routes.test.ts` | pass (6 tests) |
+| Dashboard evaluation consent, wallet, checkout, and receipt UI | `cd web && npm run test:e2e -- e2e/level4.spec.ts` | pass (1 test; mocked gateway/Stripe/Freighter) |
+| Web type safety, lint, and production instrumentation build | `cd web && npm run typecheck`; `cd web && npm run lint`; `cd web && npm run build` | pass; lint has 0 errors and 7 pre-existing warnings |
+
+## T7 narrow evidence
+
+| Behavior | Command | Result |
+|---|---|---|
+| Gateway Sentry initialization and recursive scrub | `cd ts && npm test -- --run telemetry/sentry.test.ts telemetry/sentry-scrub.test.ts` | pass (4 tests) |
+| Dedicated retention purge authorization and bounded scheduler | `cd ts && npm test -- --run evaluation-routes.test.ts` | pass (7 tests) |
+| Fee-sponsor scrubber and Sentry service boundary | `cd services/fee-sponsor && npm test`; `cd services/fee-sponsor && npm run typecheck` | pass (1 test); pass |
+| Synthetic URL validation, bounded retry, three cold/warm labels, and redacted output | `node --test scripts/level4-synthetic.test.mjs`; `node --check scripts/level4-synthetic.mjs` | pass (3 tests) |
+| CI wiring | `.github/workflows/ci.yml`, `.github/workflows/deploy-smoke.yml` inspected; exact variables and branch trigger present | pass (static review); hosted variables not available locally |
+
+The full T8 matrix must refresh the package-wide rows below. External release
+artifacts remain pending until deployment credentials, hosted URLs, Stripe
+test ingress, telemetry access, fresh screenshots, and ten distinct consenting
+participants are available.
 
 ## Required behavior evidence
 

@@ -1,5 +1,4 @@
 import { createHmac } from 'node:crypto';
-import { EVALUATION_CONSENT_VERSION } from './evaluation-contract';
 
 export { EVALUATION_CONSENT_VERSION } from './evaluation-contract';
 export const EVALUATION_PARTICIPANT_PREFIX = 'L4-';

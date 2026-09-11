@@ -44,5 +44,12 @@ deployment or cohort artifact.
 The web proxy and consent-gated checkout slice also has fresh focused tests
 and a clean typecheck recorded in the T5 testing record; these do not replace
 deployed Stripe, explorer, telemetry, screenshot, or cohort evidence.
+The dashboard consent/wallet/checkout/feedback slice, opt-in PostHog boundary,
+logout reset, browser Sentry scrubber, and target production build have fresh
+local evidence in the T6 testing record. The E2E uses mocked provider
+boundaries; it is not a hosted checkout, explorer, or telemetry artifact.
+T7 adds fresh local gateway/fee-sponsor Sentry tests, dedicated purge-route and
+scheduler tests, and synthetic monitor tests; it does not claim hosted
+synthetic passes or deployed telemetry.
 Until the external gates above are directly evidenced, this index must not
 state that Level 4 is releasable.

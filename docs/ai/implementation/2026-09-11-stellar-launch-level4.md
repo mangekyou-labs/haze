@@ -8,7 +8,7 @@ description: Reconciled implementation notes for the evaluation milestone
 
 Date: 2026-09-11  
 Feature slug: `stellar-launch`  
-Status: implementation in progress
+Status: implementation complete; final verification in progress
 
 This document is updated after each planned task. It records target-branch
 facts only; donor-worktree claims and stale screenshots are not evidence.
@@ -152,3 +152,76 @@ Fresh evidence from the target worktree:
 T6 is now active: add the dashboard evaluation flow, consented analytics, and
 recursive Sentry scrubbing without moving evaluation secrets into browser
 code.
+
+### T6 — dashboard evaluation flow and privacy telemetry (complete)
+
+Added an additive client-only evaluation card to the existing dashboard. It
+keeps launch onboarding, browser-held identity generation, indexed ticket
+status, agent configuration, playground, and Starter checkout in place while
+adding a four-stage progress view for consent, wallet proof, payment, and
+feedback. Enrollment is gated by the exact consent version and explicitly
+describes restricted 90-day retention. Freighter proof requests require the
+Testnet network, display only a redacted wallet, and never render a signature
+or raw transaction hash. The `$1` evaluation checkout is disabled until
+enrollment, wallet verification, and a browser-held commitment are all present;
+receipt reconciliation uses bounded polling and exposes only status plus a
+safe explorer link.
+
+Added opt-in-only PostHog tracking with an explicit event/property allowlist,
+memory persistence, no autocapture/pageviews/session recording, public-code
+identification, logout reset, and recursive sensitive-field filtering. Added
+browser Sentry instrumentation for client, server, and edge runtimes with
+`sendDefaultPii: false`, no traces/breadcrumbs, and the same recursive scrubber.
+The target web manifest and lockfile were regenerated with `posthog-js` and
+`@sentry/nextjs`; no donor lockfile was copied.
+
+Fresh evidence:
+
+- Red: focused analytics and scrub tests initially failed to resolve their
+  not-yet-created production modules.
+- Green: `cd web && npm test -- --run src/lib/analytics.test.ts src/lib/sentry-scrub.test.ts src/components/analytics-session-reset.test.ts src/app/api/evaluation/analytics/route.test.ts src/app/api/evaluation/routes.test.ts`
+  passed (5 files, 13 tests).
+- `cd web && npm run typecheck` passed.
+- `cd web && npm run lint` passed with zero errors; seven pre-existing warnings
+  remain outside this task's new code.
+- `cd web && npm run build` passed with the target Sentry instrumentation.
+- `cd web && npm run test:e2e -- e2e/level4.spec.ts` passed (1 test), covering
+  consent gating, mocked Freighter Testnet proof, commitment gating, `$1`
+  checkout, and receipt confirmation.
+
+### T7 — service telemetry, retention operations, and synthetic monitoring (complete)
+
+Added the same recursive, depth-bounded Sentry scrubber and PII-disabled
+initialization to the gateway and fee-sponsor service. Both services accept
+only their own `SENTRY_DSN` configuration; the gateway still receives no
+`EVALUATION_HMAC_SECRET`. Added a dedicated-secret
+`POST /v1/internal/evaluation/purge` endpoint plus a non-overlapping daily
+Postgres-backed scheduler. The route returns only an anonymized count and
+logs only a count or safe error class.
+
+Added `scripts/level4-synthetic.mjs` and focused Node tests. It requires the
+exact `LEVEL4_FRONTEND_URL`, `LEVEL4_GATEWAY_URL`, and
+`LEVEL4_FEE_SPONSOR_URL` variables, probes four health/readiness paths,
+retries transient failures within bounded limits, labels three sequential
+passes `cold`, `warm`, `warm`, and never prints URLs or response bodies. The
+scheduled/manual `.github/workflows/deploy-smoke.yml` job now runs this
+monitor, and the Level 4 branch is included in the normal CI push trigger.
+Target service manifests and lockfiles were regenerated independently.
+
+Fresh evidence:
+
+- `cd ts && npm test -- --run telemetry/sentry.test.ts telemetry/sentry-scrub.test.ts`
+  passed (4 tests).
+- `cd ts && npm test -- --run evaluation-routes.test.ts` passed (7 tests),
+  including the dedicated purge route and bounded non-overlapping scheduler.
+- `cd services/fee-sponsor && npm test` passed (1 test) and
+  `npm run typecheck` passed.
+- `node --test scripts/level4-synthetic.test.mjs && node --check scripts/level4-synthetic.mjs`
+  passed (3 tests).
+- Web analytics regression tests passed after ensuring stale opt-in state
+  cannot capture before initialization and a submitted survey emits once.
+
+T8 is active: run the fresh cross-package command matrix, reconcile every
+requirement against current code and launch-era regression tests, then perform
+the final review. Hosted deployment, cohort, fresh screenshots, and GitHub
+publication remain external acceptance gates until their credentials exist.

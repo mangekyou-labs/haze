@@ -8,7 +8,7 @@ description: Testnet-only deployment order and external acceptance gates
 
 Date: 2026-09-11  
 Feature slug: `stellar-launch`  
-Status: local implementation in progress; no deployment claimed
+Status: local implementation complete; no deployment claimed
 
 ## Configuration boundary
 
@@ -30,14 +30,26 @@ evidence, or CI logs.
    status, fee relay, and scrubbed error capture.
 3. Deploy web; verify consent enrollment, wallet proof, checkout return,
    webhook retry, explorer link, feedback, and logout analytics reset.
-4. Run three cold/warm synthetic passes using the `LEVEL4_*` CI variables.
+4. Configure the non-secret repository variables
+   `LEVEL4_FRONTEND_URL`, `LEVEL4_GATEWAY_URL`, and
+   `LEVEL4_FEE_SPONSOR_URL`, then run three cold/warm synthetic passes. The
+   monitor fails closed when any variable is missing and never prints URLs or
+   response bodies.
 5. Complete the distinct-participant cohort and generate the redacted export.
 6. Replace pending evidence, reconcile lifecycle docs, perform final review,
    repair GitHub authentication, and publish only after direct evidence exists.
 
-## Rollback and retention
+## Retention operation
+
+The gateway starts a non-overlapping daily purge after Postgres initialization.
+For an operator-triggered run, send `POST /v1/internal/evaluation/purge` with
+`Authorization: Bearer $EVALUATION_PURGE_SECRET`; this is a separate secret
+from `GATEWAY_SECRET` and the response contains only `{ "purged": number }`.
+Keep the secret in the gateway runtime configuration and do not place it in
+web, Stripe metadata, telemetry, or evidence.
+
+## Rollback
 
 Web/gateway/fee-sponsor deployments can roll back independently. Do not drop
-the evaluation schema to roll back. Purge only through the scheduled retention
-operation and preserve an audit record of the count; never publish restricted
-rows.
+the evaluation schema to roll back. Preserve an audit record of the purge
+count; never publish restricted rows.

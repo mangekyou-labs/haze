@@ -43,9 +43,12 @@ import {
 } from './evaluation.js';
 import { startSpendWorker, type SpendSubmitter } from './spend-worker.js';
 import { extractSlashTransition } from './fee-relay.js';
+import { initGatewaySentry } from './telemetry/sentry.js';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const MAX_SSE_REPLAY_BYTES = Number(process.env.MAX_SSE_REPLAY_BYTES ?? 1_000_000);
+
+initGatewaySentry();
 
 // ─── Durable store (replaces the v1 in-memory Maps) ────────────
 // Tests/local dev default to the memory store; production startup picks the
@@ -64,6 +67,9 @@ export function getIsReady(): boolean {
 let gatewayStore: GatewayStore = new MemoryGatewayStore();
 let billingStore: BillingStore = new MemoryBillingStore();
 let evaluationStore: EvaluationStore = new MemoryEvaluationStore();
+const DEFAULT_EVALUATION_PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let evaluationPurgeTimer: NodeJS.Timeout | undefined;
+let evaluationPurgeInFlight = false;
 export function setGatewayStore(store: GatewayStore): void {
   gatewayStore = store;
 }
@@ -86,6 +92,43 @@ export function setEvaluationStore(store: EvaluationStore): void {
 
 export function getEvaluationStore(): EvaluationStore {
   return evaluationStore;
+}
+
+export async function purgeExpiredEvaluationData(at = Date.now()): Promise<number> {
+  return evaluationStore.purgeExpired(at);
+}
+
+/** Start the retention purge loop after the durable store is ready. */
+export function startEvaluationPurgeScheduler(
+  intervalMs = Number(process.env.EVALUATION_PURGE_INTERVAL_MS ?? DEFAULT_EVALUATION_PURGE_INTERVAL_MS),
+): void {
+  if (evaluationPurgeTimer) clearInterval(evaluationPurgeTimer);
+  evaluationPurgeTimer = undefined;
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+
+  const run = async (): Promise<void> => {
+    if (evaluationPurgeInFlight) return;
+    evaluationPurgeInFlight = true;
+    try {
+      const purged = await purgeExpiredEvaluationData();
+      if (purged > 0) console.log(`[evaluation] retention purge anonymized ${purged} participant(s)`);
+    } catch (error) {
+      console.error('[evaluation] retention purge failed:', error instanceof Error ? error.message : 'unknown');
+    } finally {
+      evaluationPurgeInFlight = false;
+    }
+  };
+
+  evaluationPurgeTimer = setInterval(() => {
+    void run();
+  }, intervalMs);
+  evaluationPurgeTimer.unref?.();
+}
+
+export function stopEvaluationPurgeScheduler(): void {
+  if (evaluationPurgeTimer) clearInterval(evaluationPurgeTimer);
+  evaluationPurgeTimer = undefined;
+  evaluationPurgeInFlight = false;
 }
 
 // Legacy helper retained for migration tooling. The indexed-ticket launch has
@@ -175,6 +218,7 @@ export async function initDurableGatewayStore(
   setGatewayStore(store);
   setBillingStore(new PostgresBillingStore(pool));
   setEvaluationStore(new PostgresEvaluationStore(pool));
+  startEvaluationPurgeScheduler(Number(env.EVALUATION_PURGE_INTERVAL_MS ?? DEFAULT_EVALUATION_PURGE_INTERVAL_MS));
   startSpendWorker(
     {
       store,
@@ -195,6 +239,7 @@ export async function initDurableGatewayStore(
 }
 
 export async function resetGatewayStoreForTests(): Promise<void> {
+  stopEvaluationPurgeScheduler();
   setIsReady(true);
   setGatewayStore(new MemoryGatewayStore());
   setBillingStore(new MemoryBillingStore());
@@ -238,6 +283,19 @@ function requireGatewaySecret(req: Request, res: Response): boolean {
     return false;
   }
   if (req.headers.authorization !== `Bearer ${gatewaySecret}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+function requireEvaluationPurgeSecret(req: Request, res: Response): boolean {
+  const purgeSecret = process.env.EVALUATION_PURGE_SECRET || '';
+  if (!purgeSecret) {
+    res.status(500).json({ error: 'server_misconfigured' });
+    return false;
+  }
+  if (req.headers.authorization !== `Bearer ${purgeSecret}`) {
     res.status(401).json({ error: 'unauthorized' });
     return false;
   }
@@ -876,6 +934,19 @@ app.get('/v1/contract-status', async (_req: Request, res: Response) => {
       error: message,
       network: 'stellar:testnet',
     });
+  }
+});
+
+// ─── POST /v1/internal/evaluation/purge ────────────────────────
+// This operational endpoint is intentionally separate from the participant
+// routes and uses its own secret. It returns only a count, never a record.
+app.post('/v1/internal/evaluation/purge', async (req: Request, res: Response) => {
+  if (!requireEvaluationPurgeSecret(req, res)) return;
+  try {
+    res.json({ purged: await purgeExpiredEvaluationData() });
+  } catch (error) {
+    console.error('evaluation purge route failed:', error instanceof Error ? error.message : 'unknown');
+    res.status(500).json({ error: 'evaluation_purge_failed' });
   }
 });
 

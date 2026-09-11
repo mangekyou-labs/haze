@@ -10,7 +10,7 @@ Date: 2026-09-11
 Feature slug: `stellar-launch`  
 Branch: `feature-stellar-launch-level4`  
 Base: `1c17e14`  
-Status: in progress
+Status: in progress — T8 verification
 
 ## Worktree and source boundary
 
@@ -28,9 +28,9 @@ its full diff and lockfiles are not applied.
 | T3 | Authenticated gateway evaluation router | complete | route auth/validation/status tests |
 | T4 | Checkout receipts, retryable billing, existing staged deposit integration | complete | duplicate/concurrent webhook/deposit tests |
 | T5 | Web server proxies, consent-gated checkout, receipt/status APIs | complete | route/unit tests; existing checkout tests |
-| T6 | Dashboard evaluation flow and privacy telemetry | active | web unit/E2E; PostHog/Sentry scrub tests |
-| T7 | Fee-sponsor Sentry, synthetic CI, locks, operations/evidence docs | pending | service typecheck; workflow/script checks; docs audit |
-| T8 | Full verification and final review reconciliation | pending | fresh command matrix and requirement audit |
+| T6 | Dashboard evaluation flow and privacy telemetry | complete | web unit/E2E; PostHog/Sentry scrub tests |
+| T7 | Fee-sponsor Sentry, synthetic CI, locks, operations/evidence docs | complete | service typecheck; workflow/script checks; docs audit |
+| T8 | Full verification and final review reconciliation | active | fresh command matrix and requirement audit |
 
 ## Per-task workflow
 
@@ -46,4 +46,5 @@ T1–T7 are local and can proceed without provider credentials. T2's live SQL
 cases require a disposable Postgres instance. Deployment, GitHub publication,
 Stripe ingress, Sentry/PostHog screenshots, three hosted synthetic passes,
 fresh deployed screenshots, and ten consenting participants remain explicit
-external gates for T8.
+external gates for T8; local verification records those gates as pending when
+the required credentials or hosted resources are absent.

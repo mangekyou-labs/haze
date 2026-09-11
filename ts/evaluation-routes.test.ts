@@ -1,11 +1,18 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { Keypair } from '@stellar/stellar-sdk';
-import { app, resetGatewayStoreForTests } from './server.js';
+import {
+  app,
+  resetGatewayStoreForTests,
+  setEvaluationStore,
+  startEvaluationPurgeScheduler,
+  stopEvaluationPurgeScheduler,
+} from './server.js';
 import {
   EVALUATION_CONSENT_VERSION,
   buildSep53PayloadDigest,
   deriveParticipantIdentity,
+  MemoryEvaluationStore,
 } from './evaluation.js';
 
 const gatewayHeaders = (participantId: string) => ({
@@ -17,6 +24,7 @@ describe('authenticated internal evaluation routes', () => {
   beforeEach(async () => {
     await resetGatewayStoreForTests();
     process.env.GATEWAY_SECRET = 'evaluation-route-secret';
+    delete process.env.EVALUATION_PURGE_SECRET;
   });
 
   it('requires both gateway authentication and a valid opaque participant header', async () => {
@@ -154,5 +162,48 @@ describe('authenticated internal evaluation routes', () => {
     });
     expect(marked.status).toBe(200);
     expect(marked.body.processingStatus).toBe('failed');
+  });
+
+  it('runs retention purge only with the dedicated secret and returns a redacted count', async () => {
+    const participant = deriveParticipantIdentity('route-purge', 'secret');
+    const expiredStore = new MemoryEvaluationStore({ now: () => 0 });
+    setEvaluationStore(expiredStore);
+    await expiredStore.enroll(participant.fullId, EVALUATION_CONSENT_VERSION);
+    process.env.EVALUATION_PURGE_SECRET = 'purge-route-secret';
+
+    const gatewaySecretAttempt = await request(app)
+      .post('/v1/internal/evaluation/purge')
+      .set('Authorization', 'Bearer evaluation-route-secret');
+    expect(gatewaySecretAttempt.status).toBe(401);
+
+    const purged = await request(app)
+      .post('/v1/internal/evaluation/purge')
+      .set('Authorization', 'Bearer purge-route-secret');
+    expect(purged.status).toBe(200);
+    expect(purged.body).toEqual({ purged: 1 });
+    expect(JSON.stringify(purged.body)).not.toContain(participant.fullId);
+    expect((await expiredStore.listRestrictedRecords())[0]?.anonymizedAtMs).not.toBeNull();
+  });
+
+  it('supports a bounded in-process retention schedule without overlapping purges', async () => {
+    const store = new MemoryEvaluationStore();
+    let releaseFirstPurge: (value: number) => void = () => undefined;
+    const firstPurge = new Promise<number>((resolve) => {
+      releaseFirstPurge = resolve;
+    });
+    const purge = vi.spyOn(store, 'purgeExpired')
+      .mockImplementationOnce(async () => firstPurge)
+      .mockResolvedValue(0);
+    setEvaluationStore(store);
+
+    startEvaluationPurgeScheduler(5);
+    await vi.waitFor(() => expect(purge).toHaveBeenCalled(), { timeout: 500 });
+    expect(purge.mock.calls[0]?.[0]).toEqual(expect.any(Number));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(purge).toHaveBeenCalledTimes(1);
+    releaseFirstPurge(0);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stopEvaluationPurgeScheduler();
+    expect(purge.mock.calls.length).toBeGreaterThan(1);
   });
 });

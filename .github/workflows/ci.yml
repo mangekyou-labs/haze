@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [feature-stellar-launch, main]
+    branches: [feature-stellar-launch, feature-stellar-launch-level4, main]
   pull_request:
 
 concurrency:

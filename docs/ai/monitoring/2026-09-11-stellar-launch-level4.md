@@ -8,7 +8,7 @@ description: Privacy-preserving telemetry and synthetic response plan
 
 Date: 2026-09-11  
 Feature slug: `stellar-launch`  
-Status: implementation in progress
+Status: local monitoring implementation complete; hosted checks pending
 
 ## PostHog
 
@@ -27,10 +27,14 @@ PII, local variables, and breadcrumbs.
 
 ## Synthetic monitor
 
-The scheduled/manual CI workflow reads `LEVEL4_FRONTEND_URL`,
-`LEVEL4_GATEWAY_URL`, and `LEVEL4_FEE_SPONSOR_URL`, then checks frontend,
-gateway health/contract status, and fee-sponsor health with bounded timeout and
-retries. A missing fee-sponsor URL fails the required CI workflow.
+The scheduled/manual `.github/workflows/deploy-smoke.yml` job reads
+`LEVEL4_FRONTEND_URL`, `LEVEL4_GATEWAY_URL`, and `LEVEL4_FEE_SPONSOR_URL`, then
+checks frontend, gateway health/contract status, and fee-sponsor health with
+bounded timeout and retries. It executes three sequential passes (cold, warm,
+warm); missing variables fail closed rather than producing a false green.
+Gateway retention runs through the dedicated-secret
+`POST /v1/internal/evaluation/purge` operation and a daily in-process schedule
+after the durable Postgres store is initialized.
 
 ## Response
 

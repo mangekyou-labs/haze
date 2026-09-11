@@ -9,6 +9,7 @@ import express from 'express';
 import { TransactionBuilder as SDKTransactionBuilder, rpc as SorobanRpc, Networks } from '@stellar/stellar-sdk';
 import { createFeeRelayApp } from '@gateway/fee-sponsor-app.ts';
 import { PostgresFeeSponsorStore, runMigrations, createPool } from '@gateway/db/index.ts';
+import { initFeeSponsorSentry } from './sentry.js';
 
 const PORT = Number(process.env.PORT ?? 3002);
 const NETWORK_PASSPHRASE = process.env.STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -48,6 +49,7 @@ async function submitEnvelope(envelopeXdr: string): Promise<string> {
 }
 
 async function main() {
+  initFeeSponsorSentry();
   if (!CONTRACT_ID || !SPONSOR_SECRET_KEY) {
     console.error('FATAL: ZK_CONTRACT_ID and FEE_SPONSOR_SECRET_KEY are required');
     process.exit(1);

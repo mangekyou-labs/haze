@@ -7,6 +7,7 @@ import { BuyCreditsSection } from './buy-credits-section';
 import { DashboardStatus } from './dashboard-status';
 import { LlmPlayground } from './llm-playground';
 import { isGatewayConfigured, isStripeConfigured } from '@/lib/runtime-config';
+import { EvaluationSection } from './evaluation-section';
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -43,6 +44,7 @@ export default async function DashboardPage() {
 
         <div className="space-y-6">
           <DashboardStatus />
+          <EvaluationSection />
           <ApiKeySection
             userId={session.user?.id ?? ''}
             gatewayConfigured={isGatewayConfigured({
