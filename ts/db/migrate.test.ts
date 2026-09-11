@@ -24,9 +24,9 @@ describe('migrations (offline, static)', () => {
     expect([...files].sort()).toEqual(files);
   });
 
-  it('init migration provisions the three isolated schemas', () => {
+  it('init migration provisions the original three isolated schemas', () => {
     const sql = readFileSync(join(MIGRATIONS_DIR, '0001_init.sql'), 'utf8');
-    for (const s of SCHEMAS) {
+    for (const s of SCHEMAS.filter((schema) => schema !== 'evaluation')) {
       expect(sql).toMatch(new RegExp(`CREATE SCHEMA IF NOT EXISTS "${s}"`, 'i'));
     }
   });
@@ -78,6 +78,22 @@ describe('migrations (offline, static)', () => {
     expect(sql).toMatch(/candidate_root\s+text NOT NULL/i);
     expect(sql).not.toMatch(/ALTER TABLE\s+gateway\.accepted_calls/i);
   });
+
+  it('evaluation migration is the ninth migration and isolates restricted records', () => {
+    const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
+    expect(files).toContain('0009_evaluation.sql');
+    expect(files.indexOf('0009_evaluation.sql')).toBe(files.length - 1);
+    expect(SCHEMAS).toContain('evaluation');
+
+    const sql = readFileSync(join(MIGRATIONS_DIR, '0009_evaluation.sql'), 'utf8');
+    expect(sql).toMatch(/CREATE SCHEMA IF NOT EXISTS evaluation/i);
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS evaluation\.participants/i);
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS evaluation\.wallet_challenges/i);
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS evaluation\.checkout_receipts/i);
+    expect(sql).toMatch(/retention_deadline/i);
+    expect(sql).toMatch(/UNIQUE/i);
+    expect(sql).toMatch(/wallet_signature/i);
+  });
 });
 
 describe.skipIf(!dbTestsEnabled)('migrations (integration, requires Postgres)', () => {
@@ -100,6 +116,7 @@ describe.skipIf(!dbTestsEnabled)('migrations (integration, requires Postgres)', 
     await pool.query('DROP SCHEMA IF EXISTS gateway CASCADE');
     await pool.query('DROP SCHEMA IF EXISTS billing CASCADE');
     await pool.query('DROP SCHEMA IF EXISTS "fee-sponsor" CASCADE');
+    await pool.query('DROP SCHEMA IF EXISTS evaluation CASCADE');
     await pool.query('DROP TABLE IF EXISTS public.schema_migrations');
   });
 
@@ -107,7 +124,7 @@ describe.skipIf(!dbTestsEnabled)('migrations (integration, requires Postgres)', 
     await pool.end();
   });
 
-  it('applies migrations idempotently and creates the three isolated schemas', async () => {
+  it('applies migrations idempotently and creates all isolated schemas', async () => {
     const first = await runMigrations(pool, MIGRATIONS_DIR);
     expect(first.applied.length).toBeGreaterThan(0);
 
@@ -116,9 +133,9 @@ describe.skipIf(!dbTestsEnabled)('migrations (integration, requires Postgres)', 
 
     const res = await pool.query(
       `SELECT schema_name FROM information_schema.schemata
-       WHERE schema_name IN ('gateway', 'billing', 'fee-sponsor')`,
+       WHERE schema_name IN ('gateway', 'billing', 'fee-sponsor', 'evaluation')`,
     );
     const names = res.rows.map((r) => r.schema_name).sort();
-    expect(names).toEqual(['billing', 'fee-sponsor', 'gateway']);
+    expect(names).toEqual(['billing', 'evaluation', 'fee-sponsor', 'gateway']);
   });
 });

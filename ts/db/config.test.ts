@@ -30,7 +30,7 @@ describe('getDbConfig', () => {
     expect(() => getDbConfig({ PGPORT: 'abc' })).toThrow(DbConfigError);
   });
 
-  it('exposes the three isolated schemas', () => {
-    expect([...SCHEMAS]).toEqual(['gateway', 'billing', 'fee-sponsor']);
+  it('exposes all isolated schemas', () => {
+    expect([...SCHEMAS]).toEqual(['gateway', 'billing', 'fee-sponsor', 'evaluation']);
   });
 });
