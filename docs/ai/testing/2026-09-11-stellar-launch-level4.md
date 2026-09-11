@@ -59,6 +59,14 @@ implemented. No external deployment or cohort evidence is claimed.
 | Postgres migration twice, restart durability, ownership-safe insertion, and concurrent claim/reclaim | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (4 tests, disposable local cluster) |
 | Gateway adapter and billing integration type safety | `cd ts && npm run typecheck` | pass |
 
+## T5 narrow evidence
+
+| Web participant identity, consent version, and commitment validation | `cd web && npm test -- --run src/lib/evaluation-identity.test.ts src/lib/evaluation-checkout.test.ts` | pass (4 tests) |
+| Authenticated proxy field allowlists and gateway transport headers | `cd web && npm test -- --run src/lib/evaluation-transport.test.ts src/app/api/evaluation/routes.test.ts` | pass (6 tests) |
+| Consent-gated evaluation checkout and launch starter regression | `cd web && npm test -- --run src/app/api/checkout/route.test.ts` | pass (3 tests) |
+| Filtered Stripe relay payloads and receipt ownership | `cd web && npm test -- --run src/lib/stripe-relay.test.ts src/lib/evaluation-receipt.test.ts src/app/api/checkout/receipt/route.test.ts` | pass (6 tests) |
+| Web route type safety | `cd web && npm run typecheck` | pass |
+
 ## Required behavior evidence
 
 Add focused results for identity, SEP-53, expiry/replay/rate limits, unique

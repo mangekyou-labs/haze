@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
 import Stripe from 'stripe';
+import { buildGatewayBillingEvent } from '@/lib/stripe-relay';
 
 function getStripe(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY;
@@ -26,27 +27,31 @@ async function relayToGateway(event: Stripe.Event): Promise<{
     event.type === 'checkout.session.completed'
       ? (object as Stripe.Checkout.Session).metadata ?? {}
       : {};
-  const { commitment, usdcAmount } = metadata;
+  const checkout = event.type === 'checkout.session.completed'
+    ? object as Stripe.Checkout.Session
+    : undefined;
 
   if (!GATEWAY_SECRET) {
     throw new Error('GATEWAY_SECRET not configured');
   }
+
+  const relay = buildGatewayBillingEvent({
+    eventId: event.id,
+    eventType: event.type,
+    payloadHash: `sha256:${createHash('sha256').update(event.id + event.type).digest('hex')}`,
+    sessionId: checkout?.id,
+    amountTotal: checkout?.amount_total,
+    metadata,
+  });
 
   const res = await fetch(`${GATEWAY_URL}/v1/billing/stripe-event`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${GATEWAY_SECRET}`,
+      ...relay.headers,
     },
-    body: JSON.stringify({
-      eventId: event.id,
-      eventType: event.type,
-      // Payload hash lets a later audit verify the retried body was unchanged.
-      payloadHash: `sha256:${createHash('sha256').update(event.id + event.type).digest('hex')}`,
-      ...(commitment && usdcAmount
-        ? { commitment, amount: Number(usdcAmount) }
-        : {}),
-    }),
+    body: JSON.stringify(relay.body),
   });
 
   const data = await res.json() as {

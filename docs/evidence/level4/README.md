@@ -41,5 +41,8 @@ Fresh local command results are recorded in
 The current local implementation also has fresh T4 evidence for atomic
 checkout claims and retryable billing in the testing record; it is not a
 deployment or cohort artifact.
+The web proxy and consent-gated checkout slice also has fresh focused tests
+and a clean typecheck recorded in the T5 testing record; these do not replace
+deployed Stripe, explorer, telemetry, screenshot, or cohort evidence.
 Until the external gates above are directly evidenced, this index must not
 state that Level 4 is releasable.

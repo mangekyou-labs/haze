@@ -119,5 +119,36 @@ Fresh evidence:
   PostgreSQL `timestamptz` cast issue in the retry update.
 - `cd ts && npm run typecheck` passed.
 
-T5 is now active: add the web relay and consent-gated evaluation
-checkout/status experience while preserving launch onboarding and checkout.
+The next task adds the web relay and consent-gated evaluation checkout/status
+experience while preserving launch onboarding and checkout.
+
+### T5 — web proxies, checkout, and receipt ownership (complete)
+
+Added server-only web evaluation transport and identity helpers. The proxy
+derives the HMAC participant ID from the authenticated session, sends it only
+as `x-evaluation-participant-id` with `GATEWAY_SECRET`, uses bounded upstream
+timeouts, and exposes allowlisted routes for enrollment, status, challenge,
+wallet proof, feedback, deposits, checkout, and checkout status. The receipt
+route verifies the Stripe session's evaluation participant metadata before
+reading the participant-scoped gateway receipt.
+
+Extended the existing checkout API with a separate consent/enrollment-gated
+evaluation tier. It creates an exact 100-cent Stripe test-mode session with
+opaque participant metadata and the browser-held decimal commitment; the
+launch starter path keeps its existing one-dollar metadata and deposit amount.
+The Stripe webhook now uses a filtered relay builder: evaluation events carry
+session ownership and amount cents to the gateway's durable claim path, while
+legacy events retain the launch billing payload and no evaluation header.
+
+Fresh evidence from the target worktree:
+
+- Red: new web identity, transport, relay, checkout, receipt, and route tests
+  initially failed to resolve their not-yet-created production modules.
+- Green: focused web proxy/checkout/receipt/relay/identity tests passed (19
+  tests).
+- `cd web && npm run typecheck` passed after regenerating the target web
+  install from its own manifest and lockfile.
+
+T6 is now active: add the dashboard evaluation flow, consented analytics, and
+recursive Sentry scrubbing without moving evaluation secrets into browser
+code.
