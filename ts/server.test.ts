@@ -4,6 +4,7 @@ import {
   merkleTree,
   resetGatewayStoreForTests,
   getGatewayStore,
+  getEvaluationStore,
   extractNullifier,
   extractEpoch,
   proofHashOf,
@@ -11,6 +12,7 @@ import {
 } from './server.js';
 import { requestDigestToField } from '@zk-credits/shared';
 import { MemoryGatewayStore } from './db/index.js';
+import { MemoryEvaluationStore } from './evaluation.js';
 import { MerkleTree } from './merkle.js';
 import request from 'supertest';
 import {
@@ -89,6 +91,13 @@ async function proofHeaderFor(
     pubSignals: ['0', nullifier, digest.field, signalY],
   })).toString('base64');
 }
+
+describe('evaluation store lifecycle', () => {
+  it('resets to an injected memory store for unit tests', async () => {
+    await resetGatewayStoreForTests();
+    expect(getEvaluationStore()).toBeInstanceOf(MemoryEvaluationStore);
+  });
+});
 
 describe('gateway server', () => {
   describe('GET /health', () => {

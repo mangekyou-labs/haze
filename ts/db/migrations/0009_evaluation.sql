@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS evaluation.participants (
   wallet_address text UNIQUE,
   wallet_signature text,
   wallet_verified_at timestamptz,
-  deposit_transaction_hash text UNIQUE,
+  deposit_tx_hash text UNIQUE,
   deposit_explorer_url text,
   deposit_new_root text,
   deposit_confirmed_at timestamptz,
@@ -57,16 +57,17 @@ CREATE TABLE IF NOT EXISTS evaluation.checkout_receipts (
   processing_status text NOT NULL DEFAULT 'pending'
     CHECK (processing_status IN ('pending', 'processing', 'confirmed', 'failed')),
   event_id text,
-  transaction_hash text UNIQUE,
+  deposit_tx_hash text UNIQUE,
   new_root text,
   received_at timestamptz NOT NULL DEFAULT NOW(),
   processing_started_at timestamptz,
   processed_at timestamptz,
   last_error text,
+  updated_at timestamptz NOT NULL DEFAULT NOW(),
   attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
   CONSTRAINT checkout_session_id_nonempty CHECK (length(checkout_session_id) BETWEEN 1 AND 255),
   CONSTRAINT checkout_transaction_hash_format CHECK (
-    transaction_hash IS NULL OR transaction_hash ~ '^[a-fA-F0-9]{64}$'
+    deposit_tx_hash IS NULL OR deposit_tx_hash ~ '^[a-fA-F0-9]{64}$'
   )
 );
 

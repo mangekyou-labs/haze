@@ -24,3 +24,16 @@ export { MemoryBillingStore, PostgresBillingStore } from './billing.js';
 export type { StripeEvent, BillingStore } from './billing.js';
 export { MemoryFeeSponsorStore, PostgresFeeSponsorStore } from './fee-sponsor.js';
 export type { FeeRelayRequest, FeeSponsorStore } from './fee-sponsor.js';
+export { MemoryEvaluationStore, EvaluationError, EVALUATION_CONSENT_VERSION } from '../evaluation.js';
+export { PostgresEvaluationStore } from '../evaluation-postgres.js';
+export type {
+  EvaluationStore,
+  EvaluationStatus,
+  EnrollmentStatus,
+  Challenge,
+  WalletProof,
+  FeedbackInput,
+  CheckoutReceipt,
+  CheckoutProcessingStatus,
+  RestrictedEvaluationRecord,
+} from '../evaluation.js';

@@ -39,6 +39,13 @@ The failing-first evidence for T1 is recorded in the implementation document;
 the initial run failed to resolve `./evaluation.js` before the adapter was
 implemented. No external deployment or cohort evidence is claimed.
 
+## T2 narrow evidence
+
+| Behavior | Command | Result |
+|---|---|---|
+| Postgres migration twice, restart durability, and concurrent checkout ownership | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (3 tests, disposable local cluster) |
+| Gateway lifecycle injection and evaluation adapter compile | `npm run typecheck` | pass |
+
 ## Required behavior evidence
 
 Add focused results for identity, SEP-53, expiry/replay/rate limits, unique

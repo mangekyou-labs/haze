@@ -47,5 +47,29 @@ Fresh narrow evidence from the target worktree:
   passed (26 tests, 1 opt-in database test skipped).
 - `npm run typecheck` passed after building the existing shared package.
 
-T2 is now active: the next change is the Postgres adapter using the gateway's
-injected pool and migration lifecycle.
+The next lifecycle step after T1 was the Postgres adapter using the gateway's
+injected pool and migration lifecycle; that task is recorded below.
+
+### T2 — Postgres adapter and gateway lifecycle injection (complete)
+
+Added `PostgresEvaluationStore` with the same contract as the memory adapter,
+using a narrow injected `SqlPool`. It maps restricted rows to redacted status,
+uses unique database ownership constraints for wallets/deposits/checkouts,
+guards one-time challenges with a conditional update, and purges raw proof
+columns in place. The target gateway now creates this adapter from the same
+Pool used by `PostgresGatewayStore` and `PostgresBillingStore` immediately
+after the existing migration runner; test reset restores an injected memory
+adapter. No separate evaluation pool or migration lifecycle was introduced.
+
+Fresh evidence:
+
+- `cd ts && npm run typecheck` passed.
+- `cd ts && npm test -- --run server.test.ts evaluation-postgres.integration.test.ts evaluation.test.ts db/migrate.test.ts`
+  passed (73 tests, 4 opt-in tests skipped without a database).
+- With a disposable local Postgres cluster and `RUN_DB_TESTS=1`,
+  `npm test -- --run evaluation-postgres.integration.test.ts` passed (3 tests),
+  including migration idempotence, cross-instance status durability, proof
+  persistence, and concurrent same-session checkout ownership.
+
+T3 is now active: mount the authenticated gateway evaluation router while
+keeping the existing launch routes and staged deposit path intact.

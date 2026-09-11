@@ -28,11 +28,14 @@ import {
   reconstructGatewayState,
   MemoryBillingStore,
   PostgresBillingStore,
+  MemoryEvaluationStore,
+  PostgresEvaluationStore,
   createPool,
   runMigrations,
   type AcceptedCall,
   type GatewayStore,
   type BillingStore,
+  type EvaluationStore,
 } from './db/index.js';
 import { startSpendWorker, type SpendSubmitter } from './spend-worker.js';
 import { extractSlashTransition } from './fee-relay.js';
@@ -56,6 +59,7 @@ export function getIsReady(): boolean {
 
 let gatewayStore: GatewayStore = new MemoryGatewayStore();
 let billingStore: BillingStore = new MemoryBillingStore();
+let evaluationStore: EvaluationStore = new MemoryEvaluationStore();
 export function setGatewayStore(store: GatewayStore): void {
   gatewayStore = store;
 }
@@ -70,6 +74,14 @@ export function setBillingStore(store: BillingStore): void {
 
 export function getBillingStore(): BillingStore {
   return billingStore;
+}
+
+export function setEvaluationStore(store: EvaluationStore): void {
+  evaluationStore = store;
+}
+
+export function getEvaluationStore(): EvaluationStore {
+  return evaluationStore;
 }
 
 // Legacy helper retained for migration tooling. The indexed-ticket launch has
@@ -158,6 +170,7 @@ export async function initDurableGatewayStore(
   }
   setGatewayStore(store);
   setBillingStore(new PostgresBillingStore(pool));
+  setEvaluationStore(new PostgresEvaluationStore(pool));
   startSpendWorker(
     {
       store,
@@ -181,6 +194,7 @@ export async function resetGatewayStoreForTests(): Promise<void> {
   setIsReady(true);
   setGatewayStore(new MemoryGatewayStore());
   setBillingStore(new MemoryBillingStore());
+  setEvaluationStore(new MemoryEvaluationStore());
   merkleTree.replaceWith(new MerkleTree());
 }
 // ─── Config ──────────────────────────────────────────────────────
