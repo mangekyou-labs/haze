@@ -6,6 +6,8 @@ export const SEP53_PREFIX = 'Stellar Signed Message:\n';
 export const CHALLENGE_TTL_MS = 10 * 60 * 1000;
 export const RETENTION_DAYS = 90;
 export const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
+export const EVALUATION_CHECKOUT_AMOUNT_CENTS = 100;
+export const CHECKOUT_PROCESSING_LEASE_MS = 5 * 60 * 1000;
 
 const WALLET_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/;
 const TRANSACTION_HASH_PATTERN = /^[a-f0-9]{64}$/i;
@@ -130,6 +132,11 @@ export interface CheckoutReceipt {
   processedAt: string | null;
 }
 
+export interface CheckoutClaim {
+  receipt: CheckoutReceipt;
+  claimed: boolean;
+}
+
 export interface RestrictedEvaluationRecord {
   participantId: string;
   participantCode: string;
@@ -164,6 +171,11 @@ export interface EvaluationStore {
     participantId: string,
     input: { checkoutSessionId: string; amountCents: number; eventId?: string },
   ): Promise<CheckoutReceipt>;
+  claimCheckout(
+    participantId: string,
+    checkoutSessionId: string,
+    options?: { leaseMs?: number },
+  ): Promise<CheckoutClaim>;
   markCheckout(
     participantId: string,
     checkoutSessionId: string,
@@ -191,6 +203,8 @@ interface CheckoutReceiptRecord extends CheckoutReceipt {
   eventId: string | null;
   receivedAtMs: number;
   processedAtMs: number | null;
+  processingStartedAtMs: number | null;
+  attemptCount: number;
 }
 
 export interface EvidenceParticipant {
@@ -506,14 +520,20 @@ export class MemoryEvaluationStore implements EvaluationStore {
     this.requireParticipant(participantId);
     if (!input || typeof input.checkoutSessionId !== 'string'
       || input.checkoutSessionId.length === 0 || input.checkoutSessionId.length > 255
-      || !Number.isInteger(input.amountCents) || input.amountCents < 0) {
+      || !Number.isInteger(input.amountCents)
+      || input.amountCents !== EVALUATION_CHECKOUT_AMOUNT_CENTS) {
       throw new EvaluationError('checkout_invalid', 'Checkout receipt fields are invalid');
     }
     const existing = this.checkoutReceipts.get(input.checkoutSessionId);
     if (existing && existing.participantId !== participantId) {
       throw new EvaluationError('checkout_already_used', 'Checkout session is already linked');
     }
-    if (existing) return this.toCheckoutReceipt(existing);
+    if (existing) {
+      if (existing.amountCents !== input.amountCents) {
+        throw new EvaluationError('checkout_invalid', 'Checkout receipt amount cannot change');
+      }
+      return this.toCheckoutReceipt(existing);
+    }
     const receivedAtMs = this.now();
     const record: CheckoutReceiptRecord = {
       checkoutSessionId: input.checkoutSessionId,
@@ -527,9 +547,45 @@ export class MemoryEvaluationStore implements EvaluationStore {
       receivedAtMs,
       processedAtMs: null,
       eventId: input.eventId ?? null,
+      processingStartedAtMs: null,
+      attemptCount: 0,
     };
     this.checkoutReceipts.set(record.checkoutSessionId, record);
     return this.toCheckoutReceipt(record);
+  }
+
+  async claimCheckout(
+    participantId: string,
+    checkoutSessionId: string,
+    options: { leaseMs?: number } = {},
+  ): Promise<CheckoutClaim> {
+    this.requireParticipant(participantId);
+    const record = this.checkoutReceipts.get(checkoutSessionId);
+    if (!record || record.participantId !== participantId) {
+      throw new EvaluationError('checkout_not_found', 'Checkout receipt was not found');
+    }
+    if (record.processingStatus === 'confirmed') {
+      return { receipt: this.toCheckoutReceipt(record), claimed: false };
+    }
+
+    const leaseMs = options.leaseMs ?? CHECKOUT_PROCESSING_LEASE_MS;
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
+      throw new EvaluationError('checkout_invalid', 'Checkout processing lease is invalid');
+    }
+    const now = this.now();
+    const processingIsActive = record.processingStatus === 'processing'
+      && record.processingStartedAtMs !== null
+      && record.processingStartedAtMs + leaseMs > now;
+    if (processingIsActive) {
+      return { receipt: this.toCheckoutReceipt(record), claimed: false };
+    }
+
+    record.processingStatus = 'processing';
+    record.processingStartedAtMs = now;
+    record.attemptCount += 1;
+    record.processedAtMs = null;
+    record.processedAt = null;
+    return { receipt: this.toCheckoutReceipt(record), claimed: true };
   }
 
   async markCheckout(
@@ -555,6 +611,7 @@ export class MemoryEvaluationStore implements EvaluationStore {
     record.newRoot = input.newRoot ?? record.newRoot;
     record.processedAtMs = processedAtMs;
     record.processedAt = processedAtMs === null ? null : toIso(processedAtMs);
+    record.processingStartedAtMs = input.status === 'processing' ? this.now() : null;
     return this.toCheckoutReceipt(record);
   }
 

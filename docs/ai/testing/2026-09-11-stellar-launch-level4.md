@@ -51,6 +51,14 @@ implemented. No external deployment or cohort evidence is claimed.
 | Authenticated route boundary, consent/status redaction, proof replay, validation, feedback ordering, deposit linking, checkout ownership | `cd ts && npm test -- --run evaluation-routes.test.ts server.test.ts` | pass (57 tests) |
 | Gateway route type safety | `cd ts && npm run typecheck` | pass |
 
+## T4 narrow evidence
+
+| Behavior | Command | Result |
+|---|---|---|
+| Atomic memory checkout claims, failed-claim recovery, duplicate acknowledgement, retryable webhook failure, and concurrent evaluation webhook handling | `cd ts && npm test -- --run evaluation.test.ts server.test.ts` | pass (67 tests) |
+| Postgres migration twice, restart durability, ownership-safe insertion, and concurrent claim/reclaim | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (4 tests, disposable local cluster) |
+| Gateway adapter and billing integration type safety | `cd ts && npm run typecheck` | pass |
+
 ## Required behavior evidence
 
 Add focused results for identity, SEP-53, expiry/replay/rate limits, unique

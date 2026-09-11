@@ -37,7 +37,10 @@ import {
   type BillingStore,
   type EvaluationStore,
 } from './db/index.js';
-import { EvaluationError } from './evaluation.js';
+import {
+  EVALUATION_CHECKOUT_AMOUNT_CENTS,
+  EvaluationError,
+} from './evaluation.js';
 import { startSpendWorker, type SpendSubmitter } from './spend-worker.js';
 import { extractSlashTransition } from './fee-relay.js';
 
@@ -263,19 +266,23 @@ function evaluationErrorResponse(res: Response, error: unknown): void {
   }
   const status = error.code === 'rate_limited'
     ? 429
-    : ['not_enrolled', 'challenge_not_found', 'deposit_not_found', 'checkout_not_found'].includes(error.code)
-      ? 404
-      : [
-        'already_enrolled',
-        'wallet_already_used',
-        'deposit_already_used',
-        'checkout_already_used',
-        'challenge_replayed',
-        'challenge_expired',
-        'feedback_not_ready',
-      ].includes(error.code)
-        ? 409
-        : 400;
+    : error.code === 'challenge_expired'
+      ? 410
+      : error.code === 'wallet_proof_invalid'
+        ? 422
+        : ['not_enrolled', 'challenge_not_found', 'deposit_not_found', 'checkout_not_found'].includes(error.code)
+          ? 404
+          : [
+            'already_enrolled',
+            'wallet_already_used',
+            'deposit_already_used',
+            'checkout_already_used',
+            'challenge_replayed',
+            'wallet_not_verified',
+            'feedback_not_ready',
+          ].includes(error.code)
+            ? 409
+            : 400;
   res.status(status).json({ error: error.code });
 }
 
@@ -1179,8 +1186,9 @@ app.post('/v1/deposits', async (req: Request, res: Response) => {
 
 // ─── POST /v1/billing/stripe-event (idempotent webhook relay, M2.3) ─
 // The web app verifies the Stripe signature, then relays the verified event
-// here. billingStore.recordStripeEventOnce() makes redeliveries a no-op so a
-// checkout->webhook->deposit flow never double-submits.
+// here. Evaluation checkouts use their durable receipt claim as the deposit
+// idempotency anchor; launch-era checkouts continue using the existing staged
+// submitDeposit path.
 
 app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
   try {
@@ -1195,8 +1203,24 @@ app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
       return;
     }
 
-    const { eventId, eventType, payloadHash, commitment, amount } = req.body;
-    if (!eventId || !eventType || !payloadHash) {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const {
+      eventId,
+      eventType,
+      payloadHash,
+      commitment,
+      amount,
+      participantId,
+      checkoutSessionId,
+      amountCents,
+    } = body as Record<string, unknown>;
+    if (typeof eventId !== 'string' || !eventId
+      || typeof eventType !== 'string' || !eventType
+      || typeof payloadHash !== 'string' || !payloadHash) {
       res.status(400).json({
         error: 'missing_fields',
         required: ['eventId', 'eventType', 'payloadHash'],
@@ -1211,13 +1235,135 @@ app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
       payloadHash,
     );
 
-    if (!inserted) {
-      res.json({ received: true, processed: false, duplicate: true, eventId });
+    if (!inserted && (event.eventType !== eventType || event.payloadHash !== payloadHash)) {
+      res.status(409).json({ error: 'billing_event_conflict', eventId });
       return;
     }
 
+    if (!inserted && event.processed) {
+      res.json({ received: true, processed: true, duplicate: true, eventId });
+      return;
+    }
+
+    const evaluationRequested = participantId !== undefined
+      || checkoutSessionId !== undefined
+      || amountCents !== undefined;
+    if (evaluationRequested) {
+      if (eventType !== 'checkout.session.completed'
+        || typeof participantId !== 'string' || !/^[a-f0-9]{64}$/.test(participantId)
+        || typeof checkoutSessionId !== 'string' || checkoutSessionId.length === 0
+        || typeof amountCents !== 'number' || !Number.isInteger(amountCents)
+        || amountCents !== EVALUATION_CHECKOUT_AMOUNT_CENTS
+        || typeof commitment !== 'string' || !commitment
+        || (typeof amount !== 'string' && typeof amount !== 'number')) {
+        res.status(400).json({ error: 'invalid_evaluation_metadata' });
+        return;
+      }
+
+      const participantHeader = req.headers['x-evaluation-participant-id'];
+      const headerValue = Array.isArray(participantHeader) ? participantHeader[0] : participantHeader;
+      if (headerValue !== participantId) {
+        res.status(401).json({ error: 'evaluation_participant_mismatch' });
+        return;
+      }
+
+      try {
+        const status = await evaluationStore.getStatus(participantId);
+        if (!status.wallet.verified) {
+          throw new EvaluationError('wallet_not_verified', 'Wallet verification is required before checkout');
+        }
+        const receipt = await evaluationStore.recordCheckout(participantId, {
+          checkoutSessionId,
+          amountCents,
+          eventId,
+        });
+
+        if (receipt.processingStatus === 'confirmed' && receipt.transactionHash) {
+          if (!status.deposit.confirmed) {
+            await evaluationStore.linkDeposit(participantId, receipt.transactionHash, {
+              newRoot: receipt.newRoot ?? undefined,
+            });
+          }
+          await billingStore.markStripeEventProcessed(eventId);
+          res.json({
+            received: true,
+            processed: true,
+            duplicate: true,
+            eventId,
+            txHash: receipt.transactionHash,
+            newRoot: receipt.newRoot,
+          });
+          return;
+        }
+
+        const claim = await evaluationStore.claimCheckout(participantId, checkoutSessionId);
+        if (!claim.claimed) {
+          if (claim.receipt.processingStatus === 'confirmed' && claim.receipt.transactionHash) {
+            await billingStore.markStripeEventProcessed(eventId);
+            res.json({
+              received: true,
+              processed: true,
+              duplicate: true,
+              eventId,
+              txHash: claim.receipt.transactionHash,
+              newRoot: claim.receipt.newRoot,
+            });
+            return;
+          }
+          res.status(409).json({ error: 'checkout_in_progress', retryable: true, eventId });
+          return;
+        }
+
+        let result: Awaited<ReturnType<typeof submitDeposit>> | null = null;
+        try {
+          result = await submitDeposit(commitment, amount);
+          // Confirm the durable receipt before linking the participant. If the
+          // process is interrupted after the chain accepts the transaction,
+          // the retry can finish the link without submitting again.
+          await evaluationStore.markCheckout(participantId, checkoutSessionId, {
+            status: 'confirmed',
+            transactionHash: result.txHash,
+            newRoot: result.newRoot,
+          });
+          await evaluationStore.linkDeposit(participantId, result.txHash, {
+            newRoot: result.newRoot,
+          });
+        } catch (error) {
+          // Once the chain result exists, keep the receipt confirmed so a
+          // retry only repairs participant linkage. A failed submission is
+          // explicitly retryable and remains unprocessed in billing.
+          if (!result) {
+            try {
+              await evaluationStore.markCheckout(participantId, checkoutSessionId, { status: 'failed' });
+            } catch (markError) {
+              console.error('/v1/billing/stripe-event evaluation failure state unavailable:', markError);
+            }
+          }
+          throw error;
+        }
+
+        await billingStore.markStripeEventProcessed(eventId);
+        res.json({
+          received: true,
+          processed: true,
+          eventId,
+          txHash: result.txHash,
+          newRoot: result.newRoot,
+        });
+        return;
+      } catch (error) {
+        if (error instanceof EvaluationError) {
+          evaluationErrorResponse(res, error);
+          return;
+        }
+        throw error;
+      }
+    }
+
     if (eventType === 'checkout.session.completed') {
-      if (!commitment || !amount) {
+      if ((typeof commitment !== 'string' && typeof commitment !== 'number')
+        || (typeof amount !== 'string' && typeof amount !== 'number')
+        || !commitment || !amount) {
         // Event delivered, but the deposit cannot be submitted yet (e.g. the
         // user never completed onboarding). Record the receipt so a retry is
         // not lost on restart; surface the warning to the web app.
@@ -1230,7 +1376,7 @@ app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
         });
         return;
       }
-      const result = await submitDeposit(commitment, amount);
+      const result = await submitDeposit(String(commitment), amount);
       await billingStore.markStripeEventProcessed(eventId);
       res.json({
         received: true,

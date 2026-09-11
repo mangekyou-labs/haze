@@ -17,9 +17,10 @@ export interface StripeEvent {
 
 export interface BillingStore {
   /**
-   * Idempotent insert. Returns `true` when this event id was NOT yet recorded
-   * (first delivery — the caller should process it), `false` on duplicates
-   * (retry — the caller must not process again).
+   * Idempotent insert. Returns `true` when this event id was not yet recorded
+   * (first delivery). An existing processed row is an acknowledged duplicate;
+   * an existing unprocessed row is a retryable delivery that the caller may
+   * resume after a prior failure.
    */
   recordStripeEventOnce(
     eventId: string,

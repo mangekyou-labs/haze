@@ -1,9 +1,12 @@
 import {
+  CHECKOUT_PROCESSING_LEASE_MS,
   CHALLENGE_TTL_MS,
+  EVALUATION_CHECKOUT_AMOUNT_CENTS,
   EVALUATION_CONSENT_VERSION,
   RETENTION_MS,
   EvaluationError,
   type Challenge,
+  type CheckoutClaim,
   type CheckoutProcessingStatus,
   type CheckoutReceipt,
   type EnrollmentStatus,
@@ -198,7 +201,8 @@ function assertConsentVersion(consentVersion: string): void {
 function assertCheckoutInput(input: { checkoutSessionId: string; amountCents: number }): void {
   if (!input || typeof input.checkoutSessionId !== 'string'
     || input.checkoutSessionId.length === 0 || input.checkoutSessionId.length > 255
-    || !Number.isInteger(input.amountCents) || input.amountCents < 0) {
+    || !Number.isInteger(input.amountCents)
+    || input.amountCents !== EVALUATION_CHECKOUT_AMOUNT_CENTS) {
     throw new EvaluationError('checkout_invalid', 'Checkout receipt fields are invalid');
   }
 }
@@ -432,7 +436,46 @@ export class PostgresEvaluationStore implements EvaluationStore {
     if (existing.rows[0].participant_id !== participantId) {
       throw new EvaluationError('checkout_already_used', 'Checkout session is already linked');
     }
+    if (Number(existing.rows[0].amount_cents) !== input.amountCents) {
+      throw new EvaluationError('checkout_invalid', 'Checkout receipt amount cannot change');
+    }
     return rowToCheckout(existing.rows[0]);
+  }
+
+  async claimCheckout(
+    participantId: string,
+    checkoutSessionId: string,
+    options: { leaseMs?: number } = {},
+  ): Promise<CheckoutClaim> {
+    await this.participant(participantId);
+    const leaseMs = options.leaseMs ?? CHECKOUT_PROCESSING_LEASE_MS;
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
+      throw new EvaluationError('checkout_invalid', 'Checkout processing lease is invalid');
+    }
+    const now = new Date(this.currentTime());
+    const leaseCutoff = new Date(now.getTime() - leaseMs);
+    const claimed = await this.pool.query<CheckoutRow>(
+      `UPDATE evaluation.checkout_receipts
+          SET processing_status = 'processing', processing_started_at = $3,
+              processed_at = NULL, last_error = NULL, attempt_count = attempt_count + 1,
+              updated_at = $3
+        WHERE checkout_session_id = $1 AND participant_id = $2
+          AND processing_status <> 'confirmed'
+          AND (processing_status <> 'processing'
+            OR processing_started_at IS NULL
+            OR processing_started_at <= $4)
+       RETURNING *`,
+      [checkoutSessionId, participantId, now, leaseCutoff],
+    );
+    if (claimed.rows[0]) return { receipt: rowToCheckout(claimed.rows[0]), claimed: true };
+
+    const current = await this.pool.query<CheckoutRow>(
+      `SELECT * FROM evaluation.checkout_receipts
+        WHERE checkout_session_id = $1 AND participant_id = $2`,
+      [checkoutSessionId, participantId],
+    );
+    if (!current.rows[0]) throw new EvaluationError('checkout_not_found', 'Checkout receipt was not found');
+    return { receipt: rowToCheckout(current.rows[0]), claimed: false };
   }
 
   async markCheckout(
@@ -460,7 +503,9 @@ export class PostgresEvaluationStore implements EvaluationStore {
     await this.pool.query(
       `UPDATE evaluation.checkout_receipts
           SET processing_status = $1, deposit_tx_hash = COALESCE($2, deposit_tx_hash),
-              new_root = COALESCE($3, new_root), processed_at = $4, updated_at = $5
+              new_root = COALESCE($3, new_root),
+              processing_started_at = CASE WHEN $1 = 'processing' THEN $5::timestamptz ELSE NULL END,
+              processed_at = $4, updated_at = $5
         WHERE checkout_session_id = $6 AND participant_id = $7`,
       [input.status, input.transactionHash?.toLowerCase() ?? null, input.newRoot ?? null, processedAt,
         new Date(this.currentTime()), checkoutSessionId, participantId],

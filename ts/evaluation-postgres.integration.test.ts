@@ -97,4 +97,30 @@ describe.skipIf(!dbTestsEnabled)('PostgresEvaluationStore (integration, requires
       amountCents: 100,
     })).rejects.toMatchObject({ code: 'checkout_already_used' });
   });
+
+  it('claims a checkout once across stores and reclaims it after failure', async () => {
+    const participant = deriveParticipantIdentity('postgres-checkout-claim-subject', 'secret');
+    const store1 = new PostgresEvaluationStore(pool);
+    const store2 = new PostgresEvaluationStore(pool);
+    await store1.enroll(participant.fullId, EVALUATION_CONSENT_VERSION);
+    await store1.recordCheckout(participant.fullId, {
+      checkoutSessionId: 'cs_postgres_claim',
+      amountCents: 100,
+      eventId: 'evt_postgres_claim',
+    });
+
+    const claims = await Promise.all([
+      store1.claimCheckout(participant.fullId, 'cs_postgres_claim'),
+      store2.claimCheckout(participant.fullId, 'cs_postgres_claim'),
+    ]);
+    expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
+    expect(claims.filter((claim) => !claim.claimed)).toHaveLength(1);
+    expect(claims.find((claim) => !claim.claimed)?.receipt.processingStatus).toBe('processing');
+
+    await store1.markCheckout(participant.fullId, 'cs_postgres_claim', { status: 'failed' });
+    await expect(store2.claimCheckout(participant.fullId, 'cs_postgres_claim')).resolves.toMatchObject({
+      claimed: true,
+      receipt: { processingStatus: 'processing' },
+    });
+  });
 });

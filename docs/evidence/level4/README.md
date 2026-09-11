@@ -38,5 +38,8 @@ must never be committed.
 
 Fresh local command results are recorded in
 [`docs/ai/testing/2026-09-11-stellar-launch-level4.md`](../../ai/testing/2026-09-11-stellar-launch-level4.md).
+The current local implementation also has fresh T4 evidence for atomic
+checkout claims and retryable billing in the testing record; it is not a
+deployment or cohort artifact.
 Until the external gates above are directly evidenced, this index must not
 state that Level 4 is releasable.

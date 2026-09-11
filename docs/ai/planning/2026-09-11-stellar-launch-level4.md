@@ -26,8 +26,8 @@ its full diff and lockfiles are not applied.
 | T1 | Domain invariants, memory store, migration contract | complete | failing/passing unit tests; `0009` checks |
 | T2 | Postgres adapter and injected pool/migration lifecycle | complete | disposable Postgres tests; migration twice |
 | T3 | Authenticated gateway evaluation router | complete | route auth/validation/status tests |
-| T4 | Checkout receipts, retryable billing, existing staged deposit integration | active | duplicate/concurrent webhook/deposit tests |
-| T5 | Web server proxies, consent-gated checkout, receipt/status APIs | pending | route/unit tests; existing checkout tests |
+| T4 | Checkout receipts, retryable billing, existing staged deposit integration | complete | duplicate/concurrent webhook/deposit tests |
+| T5 | Web server proxies, consent-gated checkout, receipt/status APIs | active | route/unit tests; existing checkout tests |
 | T6 | Dashboard evaluation flow and privacy telemetry | pending | web unit/E2E; PostHog/Sentry scrub tests |
 | T7 | Fee-sponsor Sentry, synthetic CI, locks, operations/evidence docs | pending | service typecheck; workflow/script checks; docs audit |
 | T8 | Full verification and final review reconciliation | pending | fresh command matrix and requirement audit |

@@ -5,6 +5,7 @@ import {
   resetGatewayStoreForTests,
   getGatewayStore,
   getEvaluationStore,
+  setEvaluationStore,
   extractNullifier,
   extractEpoch,
   proofHashOf,
@@ -13,6 +14,11 @@ import {
 import { requestDigestToField } from '@zk-credits/shared';
 import { MemoryGatewayStore } from './db/index.js';
 import { MemoryEvaluationStore } from './evaluation.js';
+import {
+  EVALUATION_CONSENT_VERSION,
+  buildSep53PayloadDigest,
+  deriveParticipantIdentity,
+} from './evaluation.js';
 import { MerkleTree } from './merkle.js';
 import request from 'supertest';
 import {
@@ -882,8 +888,100 @@ describe('gateway server', () => {
         });
       expect(retry.status).toBe(200);
       expect(retry.body.duplicate).toBe(true);
-      expect(retry.body.processed).toBe(false);
+      expect(retry.body.processed).toBe(true);
       expect(retry.body.txHash).toBeUndefined();
+    });
+
+    it('resumes an unprocessed event after a transient deposit failure', async () => {
+      contractMock.deposit.mockClear();
+      contractMock.deposit.mockRejectedValueOnce(new Error('temporary rpc failure'));
+      contractMock.deposit.mockResolvedValue('retry-tx-hash');
+      const payload = {
+        eventId: 'evt_retryable',
+        eventType: 'checkout.session.completed',
+        payloadHash: 'retry-hash',
+        commitment: '889',
+        amount: '5000000',
+      };
+
+      const first = await request(app)
+        .post('/v1/billing/stripe-event')
+        .set('Authorization', 'Bearer test-secret')
+        .send(payload);
+      expect(first.status).toBe(500);
+
+      const retry = await request(app)
+        .post('/v1/billing/stripe-event')
+        .set('Authorization', 'Bearer test-secret')
+        .send(payload);
+      expect(retry.status).toBe(200);
+      expect(retry.body.processed).toBe(true);
+      expect(retry.body.txHash).toBe('retry-tx-hash');
+      expect(contractMock.deposit).toHaveBeenCalledTimes(2);
+    });
+
+    it('associates an evaluation checkout and does not submit it twice concurrently', async () => {
+      process.env.GATEWAY_SECRET_KEY = 'test-stellar-key';
+      const participant = deriveParticipantIdentity('billing-evaluation-subject', 'secret');
+      const evaluationStore = new MemoryEvaluationStore();
+      setEvaluationStore(evaluationStore);
+      await evaluationStore.enroll(participant.fullId, EVALUATION_CONSENT_VERSION);
+      const challenge = await evaluationStore.createChallenge(participant.fullId);
+      const wallet = Keypair.random();
+      const signature = wallet.sign(buildSep53PayloadDigest(challenge.message)).toString('base64');
+      await evaluationStore.verifyWallet(participant.fullId, {
+        challengeId: challenge.id,
+        address: wallet.publicKey(),
+        signature,
+        network: 'testnet',
+      });
+      const checkout = await evaluationStore.recordCheckout(participant.fullId, {
+        checkoutSessionId: 'cs_billing_evaluation',
+        amountCents: 100,
+        eventId: 'evt_evaluation',
+      });
+      expect(checkout.processingStatus).toBe('pending');
+
+      contractMock.deposit.mockClear();
+      let entered!: () => void;
+      const depositEntered = new Promise<void>((resolve) => { entered = resolve; });
+      let release!: () => void;
+      const releaseDeposit = new Promise<void>((resolve) => { release = resolve; });
+      contractMock.deposit.mockImplementation(async () => {
+        entered();
+        await releaseDeposit;
+        return 'b'.repeat(64);
+      });
+
+      const payload = {
+        eventId: 'evt_evaluation',
+        eventType: 'checkout.session.completed',
+        payloadHash: 'evaluation-hash',
+        commitment: '890',
+        amount: '10000000',
+        participantId: participant.fullId,
+        checkoutSessionId: 'cs_billing_evaluation',
+        amountCents: 100,
+      };
+      const firstRequest = request(app)
+        .post('/v1/billing/stripe-event')
+        .set('Authorization', 'Bearer test-secret')
+        .set('x-evaluation-participant-id', participant.fullId)
+        .send(payload);
+      const firstResponse = firstRequest.then((response) => response);
+      await depositEntered;
+      const concurrent = await request(app)
+        .post('/v1/billing/stripe-event')
+        .set('Authorization', 'Bearer test-secret')
+        .set('x-evaluation-participant-id', participant.fullId)
+        .send(payload);
+      expect(concurrent.status).toBe(409);
+      release();
+      const first = await firstResponse;
+      expect(first.status).toBe(200);
+      expect(contractMock.deposit).toHaveBeenCalledTimes(1);
+      expect((await evaluationStore.getCheckout(participant.fullId, 'cs_billing_evaluation')).processingStatus)
+        .toBe('confirmed');
     });
 
     it('records the receipt but skips the deposit when commitment is missing', async () => {

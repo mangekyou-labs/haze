@@ -91,5 +91,33 @@ Fresh evidence:
   passed (57 tests).
 - `cd ts && npm run typecheck` passed.
 
-T4 is now active: make checkout receipt claims and Stripe webhook retries
-durable while routing evaluation deposits through the existing staged path.
+### T4 — checkout claims and retryable billing integration (complete)
+
+Extended the evaluation receipt contract with an atomic processing claim and a
+five-minute recovery lease. Memory and Postgres stores now allow only one
+worker to submit a checkout at a time, record attempt state, and reclaim a
+failed or expired processing receipt. The Postgres adapter uses a conditional
+`UPDATE` so concurrent workers cannot both claim the same session.
+
+The billing webhook now distinguishes payload conflicts from processed
+duplicates, resumes failed/unprocessed events, and routes evaluation deposits
+through the existing `submitDeposit` staged reservation, indexed-ticket, and
+activation path. A confirmed receipt is the durable chain-result anchor, so a
+retry can repair participant linkage without submitting a second deposit.
+Launch-era `/v1/deposits` and checkout behavior remains intact.
+
+Fresh evidence:
+
+- `cd ts && npm test -- --run evaluation.test.ts server.test.ts` passed (67
+  tests), covering atomic memory claims, failed retry, duplicate
+  acknowledgement, retryable webhook failure, and concurrent evaluation
+  webhook handling.
+- `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts`
+  passed (4 tests) against a disposable local Postgres cluster, including
+  migration idempotence, cross-instance durability, ownership-safe insertion,
+  and one-claim/reclaim behavior. The run caught and fixed an explicit
+  PostgreSQL `timestamptz` cast issue in the retry update.
+- `cd ts && npm run typecheck` passed.
+
+T5 is now active: add the web relay and consent-gated evaluation
+checkout/status experience while preserving launch onboarding and checkout.

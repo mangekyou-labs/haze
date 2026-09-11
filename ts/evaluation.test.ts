@@ -221,6 +221,29 @@ describe('evaluation feedback, checkout, and evidence', () => {
       .rejects.toMatchObject({ code: 'checkout_not_found' });
   });
 
+  it('claims a checkout exactly once and allows a failed claim to resume', async () => {
+    const store = new MemoryEvaluationStore();
+    const participant = deriveParticipantIdentity('checkout-claim-subject', 'secret');
+    await store.enroll(participant.fullId, EVALUATION_CONSENT_VERSION);
+    await store.recordCheckout(participant.fullId, {
+      checkoutSessionId: 'cs_level4_claim',
+      amountCents: 100,
+      eventId: 'evt_claim',
+    });
+
+    const claims = await Promise.all([
+      store.claimCheckout(participant.fullId, 'cs_level4_claim'),
+      store.claimCheckout(participant.fullId, 'cs_level4_claim'),
+    ]);
+    expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
+    expect(claims.filter((claim) => !claim.claimed)[0].receipt.processingStatus).toBe('processing');
+
+    await store.markCheckout(participant.fullId, 'cs_level4_claim', { status: 'failed' });
+    const retry = await store.claimCheckout(participant.fullId, 'cs_level4_claim');
+    expect(retry.claimed).toBe(true);
+    expect(retry.receipt.processingStatus).toBe('processing');
+  });
+
   it('publishes only redacted evidence and enforces ten completed participants', async () => {
     const store = new MemoryEvaluationStore();
     await expect(exportEvidence(store)).rejects.toMatchObject({ code: 'minimum_participants' });
