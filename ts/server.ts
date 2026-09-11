@@ -37,6 +37,7 @@ import {
   type BillingStore,
   type EvaluationStore,
 } from './db/index.js';
+import { EvaluationError } from './evaluation.js';
 import { startSpendWorker, type SpendSubmitter } from './spend-worker.js';
 import { extractSlashTransition } from './fee-relay.js';
 
@@ -225,6 +226,57 @@ function getDepositStatus(deposit: DepositState | null): DepositStatus {
 
 function hasSpendableDeposit(deposit: DepositState | null): boolean {
   return getDepositStatus(deposit) === 'active';
+}
+
+function requireGatewaySecret(req: Request, res: Response): boolean {
+  const gatewaySecret = process.env.GATEWAY_SECRET || '';
+  if (!gatewaySecret) {
+    res.status(500).json({ error: 'server_misconfigured' });
+    return false;
+  }
+  if (req.headers.authorization !== `Bearer ${gatewaySecret}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+function evaluationParticipantId(req: Request, res: Response): string | null {
+  const header = req.headers['x-evaluation-participant-id'];
+  const participantId = Array.isArray(header) ? header[0] : header;
+  if (typeof participantId !== 'string' || participantId.length === 0) {
+    res.status(401).json({ error: 'missing_participant_id' });
+    return null;
+  }
+  if (!/^[a-f0-9]{64}$/.test(participantId)) {
+    res.status(400).json({ error: 'invalid_participant_id' });
+    return null;
+  }
+  return participantId;
+}
+
+function evaluationErrorResponse(res: Response, error: unknown): void {
+  if (!(error instanceof EvaluationError)) {
+    console.error('evaluation route error:', error instanceof Error ? error.message : 'unknown');
+    res.status(500).json({ error: 'evaluation_failed' });
+    return;
+  }
+  const status = error.code === 'rate_limited'
+    ? 429
+    : ['not_enrolled', 'challenge_not_found', 'deposit_not_found', 'checkout_not_found'].includes(error.code)
+      ? 404
+      : [
+        'already_enrolled',
+        'wallet_already_used',
+        'deposit_already_used',
+        'checkout_already_used',
+        'challenge_replayed',
+        'challenge_expired',
+        'feedback_not_ready',
+      ].includes(error.code)
+        ? 409
+        : 400;
+  res.status(status).json({ error: error.code });
 }
 
 // ─── Verification key (loaded at startup) ────────────────────────
@@ -817,6 +869,199 @@ app.get('/v1/contract-status', async (_req: Request, res: Response) => {
       error: message,
       network: 'stellar:testnet',
     });
+  }
+});
+
+// ─── Authenticated Level 4 evaluation routes ───────────────────
+// These routes receive only the derived participant id. The source GitHub
+// subject and EVALUATION_HMAC_SECRET remain in the web service.
+
+app.post('/v1/evaluation/enroll', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    const consentVersion = body && typeof body === 'object' && !Array.isArray(body)
+      ? (body as Record<string, unknown>).consentVersion
+      : undefined;
+    if (typeof consentVersion !== 'string') {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.enroll(participantId, consentVersion));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.get('/v1/evaluation/status', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    res.json(await evaluationStore.getStatus(participantId));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/challenge', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    res.json(await evaluationStore.createChallenge(participantId));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/wallet-proof', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const { challengeId, address, signature, network, message } = body as Record<string, unknown>;
+    if (typeof challengeId !== 'string' || challengeId.length === 0 || challengeId.length > 256
+      || typeof address !== 'string' || address.length > 64
+      || typeof signature !== 'string' || signature.length > 128
+      || typeof network !== 'string' || network.length === 0 || network.length > 32
+      || (message !== undefined && (typeof message !== 'string' || message.length > 2_048))) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.verifyWallet(participantId, {
+      challengeId,
+      address,
+      signature,
+      network,
+      ...(message !== undefined ? { message } : {}),
+    }));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/feedback', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.submitFeedback(participantId, body));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/deposit', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const { transactionHash, newRoot, confirmedAt } = body as Record<string, unknown>;
+    if (typeof transactionHash !== 'string' || !transactionHash) {
+      res.status(400).json({ error: 'missing_transaction_hash' });
+      return;
+    }
+    if (newRoot !== undefined && typeof newRoot !== 'string') {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    if (confirmedAt !== undefined && (typeof confirmedAt !== 'number' || !Number.isFinite(confirmedAt))) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.linkDeposit(participantId, transactionHash, {
+      newRoot,
+      confirmedAt,
+    }));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/checkout', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const { checkoutSessionId, amountCents, eventId } = body as Record<string, unknown>;
+    if (typeof checkoutSessionId !== 'string' || typeof amountCents !== 'number'
+      || !Number.isInteger(amountCents) || (eventId !== undefined && typeof eventId !== 'string')) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.recordCheckout(participantId, {
+      checkoutSessionId,
+      amountCents,
+      eventId,
+    }));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.get('/v1/evaluation/checkout', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  const checkoutSessionId = req.query.sessionId;
+  if (typeof checkoutSessionId !== 'string' || !checkoutSessionId) {
+    res.status(400).json({ error: 'missing_checkout_session' });
+    return;
+  }
+  try {
+    res.json(await evaluationStore.getCheckout(participantId, checkoutSessionId));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/checkout/status', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const { checkoutSessionId, status, transactionHash, newRoot } = body as Record<string, unknown>;
+    if (typeof checkoutSessionId !== 'string' || typeof status !== 'string'
+      || (transactionHash !== undefined && typeof transactionHash !== 'string')
+      || (newRoot !== undefined && typeof newRoot !== 'string')) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.markCheckout(participantId, checkoutSessionId, {
+      status: status as Parameters<EvaluationStore['markCheckout']>[2]['status'],
+      transactionHash,
+      newRoot,
+    }));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
   }
 });
 

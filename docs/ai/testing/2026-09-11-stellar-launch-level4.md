@@ -46,6 +46,11 @@ implemented. No external deployment or cohort evidence is claimed.
 | Postgres migration twice, restart durability, and concurrent checkout ownership | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (3 tests, disposable local cluster) |
 | Gateway lifecycle injection and evaluation adapter compile | `npm run typecheck` | pass |
 
+## T3 narrow evidence
+
+| Authenticated route boundary, consent/status redaction, proof replay, validation, feedback ordering, deposit linking, checkout ownership | `cd ts && npm test -- --run evaluation-routes.test.ts server.test.ts` | pass (57 tests) |
+| Gateway route type safety | `cd ts && npm run typecheck` | pass |
+
 ## Required behavior evidence
 
 Add focused results for identity, SEP-53, expiry/replay/rate limits, unique

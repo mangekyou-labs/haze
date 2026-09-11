@@ -71,5 +71,25 @@ Fresh evidence:
   including migration idempotence, cross-instance status durability, proof
   persistence, and concurrent same-session checkout ownership.
 
-T3 is now active: mount the authenticated gateway evaluation router while
-keeping the existing launch routes and staged deposit path intact.
+### T3 — authenticated gateway evaluation router (complete)
+
+Mounted the evaluation endpoints alongside the existing launch routes in
+`ts/server.ts`. Every evaluation request now requires the gateway bearer
+secret and an opaque 64-hex participant identifier. Enrollment enforces the
+exact consent version; status responses remain pseudonymous; challenge,
+canonical SEP-53 proof, feedback, deposit-link, and checkout receipt handlers
+delegate to the injected evaluation store. Validation and domain errors are
+returned as stable public error codes without raw signatures, messages,
+wallet addresses, subjects, or other proof material. The existing
+`/v1/deposits` handler and staged `submitDeposit` path were not changed.
+
+Fresh evidence:
+
+- Red: `cd ts && npm test -- --run evaluation-routes.test.ts` initially
+  failed because all evaluation routes were absent (404).
+- Green: `cd ts && npm test -- --run evaluation-routes.test.ts server.test.ts`
+  passed (57 tests).
+- `cd ts && npm run typecheck` passed.
+
+T4 is now active: make checkout receipt claims and Stripe webhook retries
+durable while routing evaluation deposits through the existing staged path.
