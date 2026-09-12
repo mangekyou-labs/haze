@@ -38,7 +38,10 @@ after the durable Postgres store is initialized.
 
 Hosted synthetic passes, Sentry, and PostHog remain pending until those
 variables and dashboards exist for this branch. Unset names are not treated
-as green.
+as green. This session: GitHub `vars`/`secrets` lists were `[]`;
+`node scripts/level4-synthetic.mjs` EXIT 1 missing all three `LEVEL4_*`
+variables; Deploy Smoke has not run for `feature-stellar-launch-level4`.
+Package CI success on `de394b3` is not a synthetic-monitor pass.
 
 ## Response
 

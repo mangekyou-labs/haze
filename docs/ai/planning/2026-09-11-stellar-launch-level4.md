@@ -29,9 +29,9 @@ its full diff and lockfiles are not applied.
 | T4 | Checkout receipts, retryable billing, existing staged deposit integration | complete | duplicate/concurrent webhook/deposit tests |
 | T5 | Web server proxies, consent-gated checkout, receipt/status APIs | complete | route/unit tests; existing checkout tests |
 | T6 | Dashboard evaluation flow and privacy telemetry | complete | web unit/E2E; PostHog/Sentry scrub tests |
-| T7 | Fee-sponsor Sentry, synthetic CI, locks, operations/evidence docs | complete | service typecheck; workflow/script checks; docs audit |
+| T7 | Fee-sponsor Sentry, synthetic CI, locks, operations/evidence docs | complete locally; hosted package CI green | service typecheck; workflow/script checks; docs audit; Actions CI `de394b3` success |
 | T8 | Full verification and final review reconciliation | complete locally | fresh command matrix and requirement audit |
-| T8 follow-up | Phase 7 remediations: fingerprint, monotonic checkout, 405 mutations, transactional challenge limit, `$1`/test-mode gates, crash-window honesty | complete locally | this-session matrix; hosted gates still pending |
+| T8 follow-up | Phase 7 remediations: fingerprint, monotonic checkout, 405 mutations, transactional challenge limit, `$1`/test-mode gates, crash-window honesty | complete locally | this-session matrix; hosted package CI green on `de394b3`; hosted evaluation gates still pending |
 
 ## Per-task workflow
 

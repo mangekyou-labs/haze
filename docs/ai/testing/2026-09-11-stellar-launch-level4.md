@@ -93,7 +93,7 @@ implemented. No external deployment or cohort evidence is claimed.
 | Synthetic URL validation, bounded retry, three cold/warm labels, and redacted output | `node --test scripts/level4-synthetic.test.mjs`; `node --check scripts/level4-synthetic.mjs` | pass (3 tests) |
 | Browser analytics regression after privacy fixes | `cd web && npm test -- --run src/lib/analytics.test.ts` | pass (6 tests) |
 | CI wiring | `.github/workflows/ci.yml`, `.github/workflows/deploy-smoke.yml` inspected; exact variables and branch trigger present | pass (static review); hosted variables not available locally |
-| CI `npm ci` lockfiles | `npx npm@11.19.0 ci --ignore-scripts --no-audit --no-fund` in temp copies of `ts/` and `web/` after regenerating those lockfiles with npm 11.19.0 | Local Node 24.10.0 / npm 11.6.1 `npm ci` succeeded. GitHub Actions Node 24.20.0 / npm 11.19.0 failed Install for Web, Gateway, and Fee-sponsor (nested `ts/` `npm ci`) with `Missing: @emnapi/runtime@1.11.3 from lock file` (Web also `Missing: @emnapi/core@1.11.3`). After lockfile regen, npm 11.19.0 and local npm 11.6.1 `ci` both EXIT 0. Hosted Actions rerun is still required. |
+| CI `npm ci` lockfiles | GitHub Actions CI on `de394b3` after regenerating `ts/` and `web/` lockfiles with npm 11.19.0 and pinning `ci.yml` to Node 24.20.0 | Hosted pass. PR run [34691343208](https://github.com/mangekyou-labs/haze-api/actions/runs/34691343208) and push run [34691342078](https://github.com/mangekyou-labs/haze-api/actions/runs/34691342078) both `success`. All seven jobs succeeded: Gateway, Web, Fee-sponsor, Shared, Sidecar, Circuits, Soroban. Earlier `fb60e83` Install failures (`Missing: @emnapi/runtime@1.11.3`, Web also `@emnapi/core@1.11.3`) are closed. |
 
 ## Phase 7 remediation evidence
 
@@ -118,15 +118,27 @@ deposit and ticket-allocation path.
 The crash window after chain accept and before receipt-hash persistence is
 documented; it is not claimed as resume-without-resubmit.
 
+Hosted GitHub Actions CI for SHA `de394b3` is green (PR run 34691343208,
+push run 34691342078; all seven jobs success). That is package CI, not a
+hosted evaluation gate.
+
 External release artifacts remain pending until deployment credentials, hosted
 URLs, Stripe test ingress, telemetry access, fresh screenshots, and ten
 distinct consenting participants are available. Hosted variables
 `LEVEL4_FRONTEND_URL`, `LEVEL4_GATEWAY_URL`, `LEVEL4_FEE_SPONSOR_URL`, Stripe,
 Sentry, `DATABASE_URL`, and evaluation secrets were unset in this session.
-GitHub repository variables and secrets lists were empty. The Vercel GitHub
-integration built preview
-`https://feature-zk-api-credits-git-feature-f90b0c-gadillacers-projects.vercel.app`
-for `fb60e83`; that URL is not a hosted evaluation gate.
+GitHub repository variables and secrets lists were empty (`[]`). Fresh
+`node scripts/level4-synthetic.mjs` EXIT 1:
+`Missing required Level 4 monitor variables: LEVEL4_FRONTEND_URL, LEVEL4_GATEWAY_URL, LEVEL4_FEE_SPONSOR_URL`.
+Cohort remains 0 / 10. Last Deploy Smoke workflow run is
+[33234152209](https://github.com/mangekyou-labs/haze-api/actions/runs/33234152209)
+on `main` (2026-08-29, failure); it did not run for this branch. The Vercel
+GitHub integration built preview
+`https://feature-zk-api-credits-chavufnzj-gadillacers-projects.vercel.app`
+for `de394b3` (HTTP 200, title `ZK API Credits`; branch alias also HTTP 200).
+That URL is not a hosted evaluation gate: it has no configured
+`LEVEL4_*` services, Stripe test ingress, evaluation secrets, or durable
+evaluation database.
 
 ## Required behavior evidence
 

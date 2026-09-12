@@ -52,7 +52,8 @@ T7 adds fresh local gateway/fee-sponsor Sentry tests, dedicated purge-route and
 scheduler tests, and synthetic monitor tests; T8 adds the final cross-package
 verification and persistence-race checks. Phase 7 remediations add
 fingerprint ownership after purge, monotonic checkout, 405 browser mutations,
-and transactional challenge limits. None of these claims hosted synthetic
-passes, deployed telemetry, or a cohort. Cohort remains 0 / 10.
+and transactional challenge limits. Hosted GitHub Actions package CI is green
+on `de394b3` (PR run 34691343208, all seven jobs). That is not hosted
+synthetic, Stripe, Sentry, PostHog, or cohort evidence. Cohort remains 0 / 10.
 Until the external gates above are directly evidenced, this index must not
 state that Level 4 is releasable.

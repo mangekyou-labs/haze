@@ -20,6 +20,9 @@ the derived participant ID on authenticated internal requests. The gateway
 never receives `EVALUATION_HMAC_SECRET`. A restricted Postgres database is
 required for production evaluation persistence. `.env.example` and
 `web/.env.example` list these names; they are not populated in this worktree.
+A Vercel GitHub integration preview for `de394b3` is not a Level 4
+deployment: repository `LEVEL4_*` variables, evaluation secrets, Stripe test
+ingress, and a durable evaluation database are unset.
 
 No mnemonic, private wallet key, raw signature, proof, prompt, API key, or
 GitHub subject belongs in environment output, Stripe metadata, telemetry,
