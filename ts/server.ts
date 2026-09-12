@@ -28,17 +28,27 @@ import {
   reconstructGatewayState,
   MemoryBillingStore,
   PostgresBillingStore,
+  MemoryEvaluationStore,
+  PostgresEvaluationStore,
   createPool,
   runMigrations,
   type AcceptedCall,
   type GatewayStore,
   type BillingStore,
+  type EvaluationStore,
 } from './db/index.js';
+import {
+  EVALUATION_CHECKOUT_AMOUNT_CENTS,
+  EvaluationError,
+} from './evaluation.js';
 import { startSpendWorker, type SpendSubmitter } from './spend-worker.js';
 import { extractSlashTransition } from './fee-relay.js';
+import { initGatewaySentry } from './telemetry/sentry.js';
 
 const PORT = Number(process.env.PORT ?? 3001);
 const MAX_SSE_REPLAY_BYTES = Number(process.env.MAX_SSE_REPLAY_BYTES ?? 1_000_000);
+
+initGatewaySentry();
 
 // ─── Durable store (replaces the v1 in-memory Maps) ────────────
 // Tests/local dev default to the memory store; production startup picks the
@@ -56,6 +66,10 @@ export function getIsReady(): boolean {
 
 let gatewayStore: GatewayStore = new MemoryGatewayStore();
 let billingStore: BillingStore = new MemoryBillingStore();
+let evaluationStore: EvaluationStore = new MemoryEvaluationStore();
+const DEFAULT_EVALUATION_PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let evaluationPurgeTimer: NodeJS.Timeout | undefined;
+let evaluationPurgeInFlight = false;
 export function setGatewayStore(store: GatewayStore): void {
   gatewayStore = store;
 }
@@ -70,6 +84,51 @@ export function setBillingStore(store: BillingStore): void {
 
 export function getBillingStore(): BillingStore {
   return billingStore;
+}
+
+export function setEvaluationStore(store: EvaluationStore): void {
+  evaluationStore = store;
+}
+
+export function getEvaluationStore(): EvaluationStore {
+  return evaluationStore;
+}
+
+export async function purgeExpiredEvaluationData(at = Date.now()): Promise<number> {
+  return evaluationStore.purgeExpired(at);
+}
+
+/** Start the retention purge loop after the durable store is ready. */
+export function startEvaluationPurgeScheduler(
+  intervalMs = Number(process.env.EVALUATION_PURGE_INTERVAL_MS ?? DEFAULT_EVALUATION_PURGE_INTERVAL_MS),
+): void {
+  if (evaluationPurgeTimer) clearInterval(evaluationPurgeTimer);
+  evaluationPurgeTimer = undefined;
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+
+  const run = async (): Promise<void> => {
+    if (evaluationPurgeInFlight) return;
+    evaluationPurgeInFlight = true;
+    try {
+      const purged = await purgeExpiredEvaluationData();
+      if (purged > 0) console.log(`[evaluation] retention purge anonymized ${purged} participant(s)`);
+    } catch (error) {
+      console.error('[evaluation] retention purge failed:', error instanceof Error ? error.message : 'unknown');
+    } finally {
+      evaluationPurgeInFlight = false;
+    }
+  };
+
+  evaluationPurgeTimer = setInterval(() => {
+    void run();
+  }, intervalMs);
+  evaluationPurgeTimer.unref?.();
+}
+
+export function stopEvaluationPurgeScheduler(): void {
+  if (evaluationPurgeTimer) clearInterval(evaluationPurgeTimer);
+  evaluationPurgeTimer = undefined;
+  evaluationPurgeInFlight = false;
 }
 
 // Legacy helper retained for migration tooling. The indexed-ticket launch has
@@ -158,6 +217,8 @@ export async function initDurableGatewayStore(
   }
   setGatewayStore(store);
   setBillingStore(new PostgresBillingStore(pool));
+  setEvaluationStore(new PostgresEvaluationStore(pool));
+  startEvaluationPurgeScheduler(Number(env.EVALUATION_PURGE_INTERVAL_MS ?? DEFAULT_EVALUATION_PURGE_INTERVAL_MS));
   startSpendWorker(
     {
       store,
@@ -178,9 +239,11 @@ export async function initDurableGatewayStore(
 }
 
 export async function resetGatewayStoreForTests(): Promise<void> {
+  stopEvaluationPurgeScheduler();
   setIsReady(true);
   setGatewayStore(new MemoryGatewayStore());
   setBillingStore(new MemoryBillingStore());
+  setEvaluationStore(new MemoryEvaluationStore());
   merkleTree.replaceWith(new MerkleTree());
 }
 // ─── Config ──────────────────────────────────────────────────────
@@ -211,6 +274,74 @@ function getDepositStatus(deposit: DepositState | null): DepositStatus {
 
 function hasSpendableDeposit(deposit: DepositState | null): boolean {
   return getDepositStatus(deposit) === 'active';
+}
+
+function requireGatewaySecret(req: Request, res: Response): boolean {
+  const gatewaySecret = process.env.GATEWAY_SECRET || '';
+  if (!gatewaySecret) {
+    res.status(500).json({ error: 'server_misconfigured' });
+    return false;
+  }
+  if (req.headers.authorization !== `Bearer ${gatewaySecret}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+function requireEvaluationPurgeSecret(req: Request, res: Response): boolean {
+  const purgeSecret = process.env.EVALUATION_PURGE_SECRET || '';
+  if (!purgeSecret) {
+    res.status(500).json({ error: 'server_misconfigured' });
+    return false;
+  }
+  if (req.headers.authorization !== `Bearer ${purgeSecret}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+function evaluationParticipantId(req: Request, res: Response): string | null {
+  const header = req.headers['x-evaluation-participant-id'];
+  const participantId = Array.isArray(header) ? header[0] : header;
+  if (typeof participantId !== 'string' || participantId.length === 0) {
+    res.status(401).json({ error: 'missing_participant_id' });
+    return null;
+  }
+  if (!/^[a-f0-9]{64}$/.test(participantId)) {
+    res.status(400).json({ error: 'invalid_participant_id' });
+    return null;
+  }
+  return participantId;
+}
+
+function evaluationErrorResponse(res: Response, error: unknown): void {
+  if (!(error instanceof EvaluationError)) {
+    console.error('evaluation route error:', error instanceof Error ? error.message : 'unknown');
+    res.status(500).json({ error: 'evaluation_failed' });
+    return;
+  }
+  const status = error.code === 'rate_limited'
+    ? 429
+    : error.code === 'challenge_expired'
+      ? 410
+      : error.code === 'wallet_proof_invalid'
+        ? 422
+        : ['not_enrolled', 'challenge_not_found', 'deposit_not_found', 'checkout_not_found'].includes(error.code)
+          ? 404
+          : [
+            'already_enrolled',
+            'wallet_already_used',
+            'deposit_already_used',
+            'checkout_already_used',
+            'challenge_replayed',
+            'wallet_not_verified',
+            'feedback_not_ready',
+          ].includes(error.code)
+            ? 409
+            : 400;
+  res.status(status).json({ error: error.code });
 }
 
 // ─── Verification key (loaded at startup) ────────────────────────
@@ -806,6 +937,212 @@ app.get('/v1/contract-status', async (_req: Request, res: Response) => {
   }
 });
 
+// ─── POST /v1/internal/evaluation/purge ────────────────────────
+// This operational endpoint is intentionally separate from the participant
+// routes and uses its own secret. It returns only a count, never a record.
+app.post('/v1/internal/evaluation/purge', async (req: Request, res: Response) => {
+  if (!requireEvaluationPurgeSecret(req, res)) return;
+  try {
+    res.json({ purged: await purgeExpiredEvaluationData() });
+  } catch (error) {
+    console.error('evaluation purge route failed:', error instanceof Error ? error.message : 'unknown');
+    res.status(500).json({ error: 'evaluation_purge_failed' });
+  }
+});
+
+// ─── Authenticated Level 4 evaluation routes ───────────────────
+// These routes receive only the derived participant id. The source GitHub
+// subject and EVALUATION_HMAC_SECRET remain in the web service.
+
+app.post('/v1/evaluation/enroll', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    const consentVersion = body && typeof body === 'object' && !Array.isArray(body)
+      ? (body as Record<string, unknown>).consentVersion
+      : undefined;
+    if (typeof consentVersion !== 'string') {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.enroll(participantId, consentVersion));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.get('/v1/evaluation/status', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    res.json(await evaluationStore.getStatus(participantId));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/challenge', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    res.json(await evaluationStore.createChallenge(participantId));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/wallet-proof', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const { challengeId, address, signature, network, message } = body as Record<string, unknown>;
+    if (typeof challengeId !== 'string' || challengeId.length === 0 || challengeId.length > 256
+      || typeof address !== 'string' || address.length > 64
+      || typeof signature !== 'string' || signature.length > 128
+      || typeof network !== 'string' || network.length === 0 || network.length > 32
+      || (message !== undefined && (typeof message !== 'string' || message.length > 2_048))) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.verifyWallet(participantId, {
+      challengeId,
+      address,
+      signature,
+      network,
+      ...(message !== undefined ? { message } : {}),
+    }));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/feedback', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.submitFeedback(participantId, body));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/deposit', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const { transactionHash, newRoot, confirmedAt } = body as Record<string, unknown>;
+    if (typeof transactionHash !== 'string' || !transactionHash) {
+      res.status(400).json({ error: 'missing_transaction_hash' });
+      return;
+    }
+    if (newRoot !== undefined && typeof newRoot !== 'string') {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    if (confirmedAt !== undefined && (typeof confirmedAt !== 'number' || !Number.isFinite(confirmedAt))) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.linkDeposit(participantId, transactionHash, {
+      newRoot,
+      confirmedAt,
+    }));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/checkout', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const { checkoutSessionId, amountCents, eventId } = body as Record<string, unknown>;
+    if (typeof checkoutSessionId !== 'string' || typeof amountCents !== 'number'
+      || !Number.isInteger(amountCents) || (eventId !== undefined && typeof eventId !== 'string')) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.recordCheckout(participantId, {
+      checkoutSessionId,
+      amountCents,
+      eventId,
+    }));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.get('/v1/evaluation/checkout', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  const checkoutSessionId = req.query.sessionId;
+  if (typeof checkoutSessionId !== 'string' || !checkoutSessionId) {
+    res.status(400).json({ error: 'missing_checkout_session' });
+    return;
+  }
+  try {
+    res.json(await evaluationStore.getCheckout(participantId, checkoutSessionId));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
+app.post('/v1/evaluation/checkout/status', async (req: Request, res: Response) => {
+  if (!requireGatewaySecret(req, res)) return;
+  const participantId = evaluationParticipantId(req, res);
+  if (!participantId) return;
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const { checkoutSessionId, status, transactionHash, newRoot } = body as Record<string, unknown>;
+    if (typeof checkoutSessionId !== 'string' || typeof status !== 'string'
+      || (transactionHash !== undefined && typeof transactionHash !== 'string')
+      || (newRoot !== undefined && typeof newRoot !== 'string')) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    res.json(await evaluationStore.markCheckout(participantId, checkoutSessionId, {
+      status: status as Parameters<EvaluationStore['markCheckout']>[2]['status'],
+      transactionHash,
+      newRoot,
+    }));
+  } catch (error) {
+    evaluationErrorResponse(res, error);
+  }
+});
+
 // ─── POST /v1/deposits (on-chain deposit, requires GATEWAY_SECRET) ─
 
 // Shared deposit path: insert into the off-chain Merkle tree, then submit the
@@ -920,8 +1257,9 @@ app.post('/v1/deposits', async (req: Request, res: Response) => {
 
 // ─── POST /v1/billing/stripe-event (idempotent webhook relay, M2.3) ─
 // The web app verifies the Stripe signature, then relays the verified event
-// here. billingStore.recordStripeEventOnce() makes redeliveries a no-op so a
-// checkout->webhook->deposit flow never double-submits.
+// here. Evaluation checkouts use their durable receipt claim as the deposit
+// idempotency anchor; launch-era checkouts continue using the existing staged
+// submitDeposit path.
 
 app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
   try {
@@ -936,8 +1274,24 @@ app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
       return;
     }
 
-    const { eventId, eventType, payloadHash, commitment, amount } = req.body;
-    if (!eventId || !eventType || !payloadHash) {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ error: 'invalid_fields' });
+      return;
+    }
+    const {
+      eventId,
+      eventType,
+      payloadHash,
+      commitment,
+      amount,
+      participantId,
+      checkoutSessionId,
+      amountCents,
+    } = body as Record<string, unknown>;
+    if (typeof eventId !== 'string' || !eventId
+      || typeof eventType !== 'string' || !eventType
+      || typeof payloadHash !== 'string' || !payloadHash) {
       res.status(400).json({
         error: 'missing_fields',
         required: ['eventId', 'eventType', 'payloadHash'],
@@ -952,13 +1306,135 @@ app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
       payloadHash,
     );
 
-    if (!inserted) {
-      res.json({ received: true, processed: false, duplicate: true, eventId });
+    if (!inserted && (event.eventType !== eventType || event.payloadHash !== payloadHash)) {
+      res.status(409).json({ error: 'billing_event_conflict', eventId });
       return;
     }
 
+    if (!inserted && event.processed) {
+      res.json({ received: true, processed: true, duplicate: true, eventId });
+      return;
+    }
+
+    const evaluationRequested = participantId !== undefined
+      || checkoutSessionId !== undefined
+      || amountCents !== undefined;
+    if (evaluationRequested) {
+      if (eventType !== 'checkout.session.completed'
+        || typeof participantId !== 'string' || !/^[a-f0-9]{64}$/.test(participantId)
+        || typeof checkoutSessionId !== 'string' || checkoutSessionId.length === 0
+        || typeof amountCents !== 'number' || !Number.isInteger(amountCents)
+        || amountCents !== EVALUATION_CHECKOUT_AMOUNT_CENTS
+        || typeof commitment !== 'string' || !commitment
+        || (typeof amount !== 'string' && typeof amount !== 'number')) {
+        res.status(400).json({ error: 'invalid_evaluation_metadata' });
+        return;
+      }
+
+      const participantHeader = req.headers['x-evaluation-participant-id'];
+      const headerValue = Array.isArray(participantHeader) ? participantHeader[0] : participantHeader;
+      if (headerValue !== participantId) {
+        res.status(401).json({ error: 'evaluation_participant_mismatch' });
+        return;
+      }
+
+      try {
+        const status = await evaluationStore.getStatus(participantId);
+        if (!status.wallet.verified) {
+          throw new EvaluationError('wallet_not_verified', 'Wallet verification is required before checkout');
+        }
+        const receipt = await evaluationStore.recordCheckout(participantId, {
+          checkoutSessionId,
+          amountCents,
+          eventId,
+        });
+
+        if (receipt.processingStatus === 'confirmed' && receipt.transactionHash) {
+          if (!status.deposit.confirmed) {
+            await evaluationStore.linkDeposit(participantId, receipt.transactionHash, {
+              newRoot: receipt.newRoot ?? undefined,
+            });
+          }
+          await billingStore.markStripeEventProcessed(eventId);
+          res.json({
+            received: true,
+            processed: true,
+            duplicate: true,
+            eventId,
+            txHash: receipt.transactionHash,
+            newRoot: receipt.newRoot,
+          });
+          return;
+        }
+
+        const claim = await evaluationStore.claimCheckout(participantId, checkoutSessionId);
+        if (!claim.claimed) {
+          if (claim.receipt.processingStatus === 'confirmed' && claim.receipt.transactionHash) {
+            await billingStore.markStripeEventProcessed(eventId);
+            res.json({
+              received: true,
+              processed: true,
+              duplicate: true,
+              eventId,
+              txHash: claim.receipt.transactionHash,
+              newRoot: claim.receipt.newRoot,
+            });
+            return;
+          }
+          res.status(409).json({ error: 'checkout_in_progress', retryable: true, eventId });
+          return;
+        }
+
+        let result: Awaited<ReturnType<typeof submitDeposit>> | null = null;
+        try {
+          result = await submitDeposit(commitment, amount);
+          // Confirm the durable receipt before linking the participant. If the
+          // process is interrupted after the chain accepts the transaction,
+          // the retry can finish the link without submitting again.
+          await evaluationStore.markCheckout(participantId, checkoutSessionId, {
+            status: 'confirmed',
+            transactionHash: result.txHash,
+            newRoot: result.newRoot,
+          });
+          await evaluationStore.linkDeposit(participantId, result.txHash, {
+            newRoot: result.newRoot,
+          });
+        } catch (error) {
+          // Once the chain result exists, keep the receipt confirmed so a
+          // retry only repairs participant linkage. A failed submission is
+          // explicitly retryable and remains unprocessed in billing.
+          if (!result) {
+            try {
+              await evaluationStore.markCheckout(participantId, checkoutSessionId, { status: 'failed' });
+            } catch (markError) {
+              console.error('/v1/billing/stripe-event evaluation failure state unavailable:', markError);
+            }
+          }
+          throw error;
+        }
+
+        await billingStore.markStripeEventProcessed(eventId);
+        res.json({
+          received: true,
+          processed: true,
+          eventId,
+          txHash: result.txHash,
+          newRoot: result.newRoot,
+        });
+        return;
+      } catch (error) {
+        if (error instanceof EvaluationError) {
+          evaluationErrorResponse(res, error);
+          return;
+        }
+        throw error;
+      }
+    }
+
     if (eventType === 'checkout.session.completed') {
-      if (!commitment || !amount) {
+      if ((typeof commitment !== 'string' && typeof commitment !== 'number')
+        || (typeof amount !== 'string' && typeof amount !== 'number')
+        || !commitment || !amount) {
         // Event delivered, but the deposit cannot be submitted yet (e.g. the
         // user never completed onboarding). Record the receipt so a retry is
         // not lost on restart; surface the warning to the web app.
@@ -971,7 +1447,7 @@ app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
         });
         return;
       }
-      const result = await submitDeposit(commitment, amount);
+      const result = await submitDeposit(String(commitment), amount);
       await billingStore.markStripeEventProcessed(eventId);
       res.json({
         received: true,
@@ -986,10 +1462,9 @@ app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
     // Non-checkout event types are recorded but require no deposit.
     await billingStore.markStripeEventProcessed(eventId);
     res.json({ received: true, processed: true, eventId });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'unknown';
-    console.error('/v1/billing/stripe-event error:', message);
-    res.status(500).json({ error: 'billing_event_failed', message });
+  } catch {
+    console.error('/v1/billing/stripe-event failed');
+    res.status(500).json({ error: 'billing_event_failed' });
   }
 });
 

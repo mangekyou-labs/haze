@@ -17,6 +17,7 @@
     "@noble/hashes": "^2.2.0",
     "@scure/base": "^2.2.0",
     "@scure/bip39": "^2.2.0",
+    "@sentry/node": "^10.74.0",
     "@stellar/stellar-base": "^15.0.0",
     "@stellar/stellar-sdk": "^16.0.1",
     "@zk-credits/shared": "file:../packages/zk-credits-shared",

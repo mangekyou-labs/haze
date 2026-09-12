@@ -4,7 +4,7 @@
 
 import type { PoolConfig } from 'pg';
 
-export const SCHEMAS = ['gateway', 'billing', 'fee-sponsor'] as const;
+export const SCHEMAS = ['gateway', 'billing', 'fee-sponsor', 'evaluation'] as const;
 export type SchemaName = (typeof SCHEMAS)[number];
 
 export class DbConfigError extends Error {

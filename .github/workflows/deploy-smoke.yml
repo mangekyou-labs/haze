@@ -12,6 +12,8 @@ name: Deploy Smoke
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -55,3 +57,21 @@ jobs:
         run: curl -fsS "$WEB_URL" | grep -q "ZK API Credits" && echo "web landing OK"
       - name: Web contract-status proxy reachable
         run: curl -fsS -o /dev/null -w 'contract-status -> %{http_code}\n' "$WEB_URL/api/dashboard/status"
+
+  level4-synthetic:
+    name: Level 4 cold/warm synthetic monitor
+    # Repository variables are non-secret URLs. The monitor itself never
+    # prints them and fails closed if any service is not configured.
+    runs-on: ubuntu-latest
+    env:
+      LEVEL4_FRONTEND_URL: ${{ vars.LEVEL4_FRONTEND_URL }}
+      LEVEL4_GATEWAY_URL: ${{ vars.LEVEL4_GATEWAY_URL }}
+      LEVEL4_FEE_SPONSOR_URL: ${{ vars.LEVEL4_FEE_SPONSOR_URL }}
+      LEVEL4_SYNTHETIC_PASSES: '3'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run three cold/warm passes
+        run: node scripts/level4-synthetic.mjs

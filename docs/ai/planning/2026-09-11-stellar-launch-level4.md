@@ -1,0 +1,54 @@
+---
+phase: planning
+title: Stellar Launch — Level 4 delivery plan
+description: TDD task plan for the additive consent-based evaluation milestone
+---
+
+# Stellar Launch — Level 4 delivery plan
+
+Date: 2026-09-11  
+Feature slug: `stellar-launch`  
+Branch: `feature-stellar-launch-level4`  
+Base: `1c17e14`  
+Status: local implementation verified; hosted acceptance pending
+
+## Worktree and source boundary
+
+Implementation is isolated at
+`/Users/kyler/repos/feature-zk-api-credits/.worktrees/feature-stellar-launch-level4`.
+The donor `feature-zk-api-credits` worktree is read-only reference material;
+its full diff and lockfiles are not applied.
+
+## Task sequence
+
+| Task | Scope | Status | Required evidence |
+|---|---|---|---|
+| T1 | Domain invariants, memory store, migration contract | complete | failing/passing unit tests; `0009` checks |
+| T2 | Postgres adapter and injected pool/migration lifecycle | complete | disposable Postgres tests; migration twice |
+| T3 | Authenticated gateway evaluation router | complete | route auth/validation/status tests |
+| T4 | Checkout receipts, retryable billing, existing staged deposit integration | complete | duplicate/concurrent webhook/deposit tests |
+| T5 | Web server proxies, consent-gated checkout, receipt/status APIs | complete | route/unit tests; existing checkout tests |
+| T6 | Dashboard evaluation flow and privacy telemetry | complete | web unit/E2E; PostHog/Sentry scrub tests |
+| T7 | Fee-sponsor Sentry, synthetic CI, locks, operations/evidence docs | complete locally; hosted package CI green | service typecheck; workflow/script checks; docs audit; Actions CI `de394b3` success |
+| T8 | Full verification and final review reconciliation | complete locally | fresh command matrix and requirement audit |
+| T8 follow-up | Phase 7 remediations: fingerprint, monotonic checkout, 405 mutations, transactional challenge limit, `$1`/test-mode gates, crash-window honesty | complete locally | this-session matrix; hosted package CI green on `de394b3`; hosted evaluation gates still pending |
+
+## Per-task workflow
+
+For every task: inspect the current target, add a focused failing test, make
+the minimum implementation change, refactor, run the narrow and affected
+checks, then update requirements/design/planning/implementation/testing and
+the evidence index with facts only. Existing launch behavior is a regression
+gate at every integration task.
+
+## Dependencies and external gates
+
+T1–T7 are local and can proceed without provider credentials. T2's live SQL
+cases require a disposable Postgres instance. Deployment, GitHub publication,
+Stripe ingress, Sentry/PostHog screenshots, three hosted synthetic passes,
+fresh deployed screenshots, and ten consenting participants remain explicit
+external gates for T8; local verification records those gates as pending when
+the required credentials or hosted resources are absent.
+
+The Phase 7 remediations close local design gaps found during Check
+Implementation. They do not convert hosted gates into local passes.
