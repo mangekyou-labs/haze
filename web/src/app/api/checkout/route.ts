@@ -125,9 +125,8 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json({ url: checkoutSession.url });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'stripe_error';
-    console.error('Stripe checkout error:', message);
-    return NextResponse.json({ error: 'stripe_error', message }, { status: 500 });
+  } catch {
+    console.error('Stripe checkout request failed');
+    return NextResponse.json({ error: 'stripe_error' }, { status: 500 });
   }
 }

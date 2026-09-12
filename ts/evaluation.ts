@@ -196,6 +196,7 @@ interface ChallengeRecord extends Challenge {
 
 interface ParticipantRecord extends RestrictedEvaluationRecord {
   challengeIds: string[];
+  walletFingerprint: string | null;
 }
 
 interface CheckoutReceiptRecord extends CheckoutReceipt {
@@ -329,6 +330,11 @@ export function redactWalletAddress(address: string): string {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
 }
 
+/** Retained pseudonymous ownership marker; raw wallet material is still purgeable. */
+export function fingerprintWalletAddress(address: string): string {
+  return createHash('sha256').update(address, 'utf8').digest('hex');
+}
+
 function toIso(timestamp: number): string {
   return new Date(timestamp).toISOString();
 }
@@ -391,6 +397,7 @@ export class MemoryEvaluationStore implements EvaluationStore {
       feedback: null,
       anonymizedAtMs: null,
       challengeIds: [],
+      walletFingerprint: null,
     };
     this.participants.set(participantId, record);
     return this.toEnrollmentStatus(record);
@@ -452,20 +459,33 @@ export class MemoryEvaluationStore implements EvaluationStore {
       || !verifyWalletProof({ ...proof, message: challenge.message })) {
       throw new EvaluationError('wallet_proof_invalid', 'Wallet proof could not be verified');
     }
-    const currentOwner = this.walletOwners.get(proof.address);
+    const walletFingerprint = fingerprintWalletAddress(proof.address);
+    const currentOwner = this.walletOwners.get(walletFingerprint);
     if (currentOwner && currentOwner !== participantId) {
       throw new EvaluationError('wallet_already_used', 'Wallet is already enrolled');
     }
-    if (participant.walletAddress && participant.walletAddress !== proof.address) {
+    if (participant.walletFingerprint && participant.walletFingerprint !== walletFingerprint) {
       throw new EvaluationError('wallet_already_used', 'Participant already has a different wallet');
     }
 
-    const verifiedAtMs = this.now();
-    challenge.usedAtMs = verifiedAtMs;
+    challenge.usedAtMs = this.now();
+    if (participant.walletFingerprint === walletFingerprint) {
+      if (participant.walletVerifiedAtMs === null) {
+        throw new EvaluationError('wallet_proof_invalid', 'Wallet verification state is invalid');
+      }
+      return {
+        verified: true,
+        addressRedacted: redactWalletAddress(proof.address),
+        verifiedAt: toIso(participant.walletVerifiedAtMs),
+      };
+    }
+
+    const verifiedAtMs = challenge.usedAtMs;
     participant.walletAddress = proof.address;
     participant.walletSignature = proof.signature;
     participant.walletVerifiedAtMs = verifiedAtMs;
-    this.walletOwners.set(proof.address, participantId);
+    participant.walletFingerprint = walletFingerprint;
+    this.walletOwners.set(walletFingerprint, participantId);
 
     return { verified: true, addressRedacted: redactWalletAddress(proof.address), verifiedAt: toIso(verifiedAtMs) };
   }
@@ -476,7 +496,7 @@ export class MemoryEvaluationStore implements EvaluationStore {
     options: { newRoot?: string; confirmedAt?: number } = {},
   ): Promise<EvaluationStatus> {
     const participant = this.requireParticipant(participantId);
-    if (!participant.walletAddress) {
+    if (participant.walletVerifiedAtMs === null) {
       throw new EvaluationError('wallet_not_verified', 'Wallet verification is required first');
     }
     if (typeof transactionHash !== 'string' || !TRANSACTION_HASH_PATTERN.test(transactionHash)) {
@@ -503,7 +523,7 @@ export class MemoryEvaluationStore implements EvaluationStore {
 
   async submitFeedback(participantId: string, input: Partial<FeedbackInput>): Promise<EvaluationStatus> {
     const participant = this.requireParticipant(participantId);
-    if (!participant.walletAddress || !participant.depositTransactionHash) {
+    if (participant.walletVerifiedAtMs === null || !participant.depositTransactionHash) {
       throw new EvaluationError('feedback_not_ready', 'Wallet verification and deposit are required first');
     }
     const validated = validateFeedback(input);
@@ -631,7 +651,7 @@ export class MemoryEvaluationStore implements EvaluationStore {
       enrolledAt: toIso(participant.enrolledAtMs),
       retentionDeadline: toIso(participant.retentionDeadlineMs),
       wallet: {
-        verified: participant.walletAddress !== null && participant.walletVerifiedAtMs !== null,
+        verified: participant.walletVerifiedAtMs !== null,
         addressRedacted: participant.walletAddress ? redactWalletAddress(participant.walletAddress) : null,
       },
       deposit: {
@@ -641,8 +661,7 @@ export class MemoryEvaluationStore implements EvaluationStore {
         newRoot: participant.depositNewRoot,
       },
       feedbackSubmitted: participant.feedback !== null,
-      complete: participant.walletAddress !== null
-        && participant.walletVerifiedAtMs !== null
+      complete: participant.walletVerifiedAtMs !== null
         && participant.depositConfirmedAtMs !== null
         && participant.feedback !== null,
     };
@@ -673,7 +692,6 @@ export class MemoryEvaluationStore implements EvaluationStore {
     let purged = 0;
     for (const participant of this.participants.values()) {
       if (participant.anonymizedAtMs !== null || participant.retentionDeadlineMs > at) continue;
-      if (participant.walletAddress) this.walletOwners.delete(participant.walletAddress);
       participant.walletAddress = null;
       participant.walletSignature = null;
       participant.anonymizedAtMs = at;

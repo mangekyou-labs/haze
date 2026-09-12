@@ -288,8 +288,65 @@ describe('evaluation feedback, checkout, and evidence', () => {
       anonymizedAtMs: now,
     }]);
     await expect(store.getStatus(participant.fullId)).resolves.toMatchObject({
-      wallet: { verified: false, addressRedacted: null },
+      wallet: { verified: true, addressRedacted: null },
       complete: false,
     });
+  });
+
+  it('retains completion and wallet ownership after raw proof material is purged', async () => {
+    let now = 1_700_000_000_000;
+    const store = new MemoryEvaluationStore({ now: () => now });
+    const first = deriveParticipantIdentity('retention-owner-1', 'secret');
+    const second = deriveParticipantIdentity('retention-owner-2', 'secret');
+    await store.enroll(first.fullId, EVALUATION_CONSENT_VERSION);
+    await store.enroll(second.fullId, EVALUATION_CONSENT_VERSION);
+
+    const wallet = Keypair.random();
+    const challenge = await store.createChallenge(first.fullId);
+    await store.verifyWallet(first.fullId, {
+      challengeId: challenge.id,
+      address: wallet.publicKey(),
+      signature: wallet.sign(buildSep53PayloadDigest(challenge.message)).toString('base64'),
+      network: 'testnet',
+    });
+    await store.linkDeposit(first.fullId, 'e'.repeat(64));
+    await store.submitFeedback(first.fullId, makeFeedback());
+
+    now += RETENTION_MS + 1;
+    await store.purgeExpired();
+    await expect(store.getStatus(first.fullId)).resolves.toMatchObject({
+      wallet: { verified: true, addressRedacted: null },
+      complete: true,
+    });
+
+    const repeatChallenge = await store.createChallenge(first.fullId);
+    await expect(store.verifyWallet(first.fullId, {
+      challengeId: repeatChallenge.id,
+      address: wallet.publicKey(),
+      signature: wallet.sign(buildSep53PayloadDigest(repeatChallenge.message)).toString('base64'),
+      network: 'testnet',
+    })).resolves.toMatchObject({ verified: true });
+    await expect(store.listRestrictedRecords()).resolves.toMatchObject([{
+      walletAddress: null,
+      walletSignature: null,
+      anonymizedAtMs: now,
+    }, {}]);
+
+    const replacement = Keypair.random();
+    const replacementChallenge = await store.createChallenge(first.fullId);
+    await expect(store.verifyWallet(first.fullId, {
+      challengeId: replacementChallenge.id,
+      address: replacement.publicKey(),
+      signature: replacement.sign(buildSep53PayloadDigest(replacementChallenge.message)).toString('base64'),
+      network: 'testnet',
+    })).rejects.toMatchObject({ code: 'wallet_already_used' });
+
+    const duplicateChallenge = await store.createChallenge(second.fullId);
+    await expect(store.verifyWallet(second.fullId, {
+      challengeId: duplicateChallenge.id,
+      address: wallet.publicKey(),
+      signature: wallet.sign(buildSep53PayloadDigest(duplicateChallenge.message)).toString('base64'),
+      network: 'testnet',
+    })).rejects.toMatchObject({ code: 'wallet_already_used' });
   });
 });

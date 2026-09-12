@@ -920,6 +920,28 @@ describe('gateway server', () => {
       expect(contractMock.deposit).toHaveBeenCalledTimes(2);
     });
 
+    it('does not expose deposit exception details to clients or logs', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      contractMock.deposit.mockRejectedValueOnce(new Error('rpc refused commitment=private-field'));
+
+      const response = await request(app)
+        .post('/v1/billing/stripe-event')
+        .set('Authorization', 'Bearer test-secret')
+        .send({
+          eventId: 'evt_private_failure',
+          eventType: 'checkout.session.completed',
+          payloadHash: 'private-failure-hash',
+          commitment: '891',
+          amount: '5000000',
+        });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: 'billing_event_failed' });
+      expect(consoleError).toHaveBeenCalledWith('/v1/billing/stripe-event failed');
+      expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining('private-field'));
+      consoleError.mockRestore();
+    });
+
     it('associates an evaluation checkout and does not submit it twice concurrently', async () => {
       process.env.GATEWAY_SECRET_KEY = 'test-stellar-key';
       const participant = deriveParticipantIdentity('billing-evaluation-subject', 'secret');

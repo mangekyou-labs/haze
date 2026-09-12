@@ -36,6 +36,10 @@ Gateway retention runs through the dedicated-secret
 `POST /v1/internal/evaluation/purge` operation and a daily in-process schedule
 after the durable Postgres store is initialized.
 
+Hosted synthetic passes, Sentry, and PostHog remain pending until those
+variables and dashboards exist for this branch. Unset names are not treated
+as green.
+
 ## Response
 
 Treat gateway, contract, or fee-sponsor failure as a cohort blocker. The web

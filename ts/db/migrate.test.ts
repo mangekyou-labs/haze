@@ -93,6 +93,9 @@ describe('migrations (offline, static)', () => {
     expect(sql).toMatch(/retention_deadline/i);
     expect(sql).toMatch(/UNIQUE/i);
     expect(sql).toMatch(/wallet_signature/i);
+    expect(sql).toMatch(/wallet_fingerprint\s+text\s+UNIQUE/i);
+    expect(sql).toMatch(/wallet_fingerprint IS NULL OR wallet_fingerprint ~ '\^\[a-f0-9\]\{64\}\$'/i);
+    expect(sql).toMatch(/amount_cents\s+integer\s+NOT NULL\s+CHECK\s*\(amount_cents\s*=\s*100\)/i);
   });
 });
 

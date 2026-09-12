@@ -15,6 +15,8 @@ import { POST as enroll } from './enroll/route';
 import { GET as status } from './status/route';
 import { POST as walletProof } from './wallet-proof/route';
 import { POST as checkoutPost, GET as checkoutGet } from './checkout/route';
+import { POST as checkoutStatusPost } from './checkout/status/route';
+import { POST as depositPost } from './deposit/route';
 
 describe('evaluation web proxy routes', () => {
   it('requires the exact consent version before forwarding enrollment', async () => {
@@ -70,7 +72,7 @@ describe('evaluation web proxy routes', () => {
     );
   });
 
-  it('keeps checkout ownership in the query/body contract', async () => {
+  it('keeps checkout ownership in the status-read query contract', async () => {
     mocks.proxy.mockClear();
     await checkoutGet(new NextRequest(
       'http://localhost/api/evaluation/checkout?sessionId=cs_test%2F1',
@@ -79,8 +81,11 @@ describe('evaluation web proxy routes', () => {
       '/v1/evaluation/checkout?sessionId=cs_test%2F1',
       'GET',
     );
+  });
 
-    await checkoutPost(new NextRequest('http://localhost/api/evaluation/checkout', {
+  it('rejects browser-controlled evaluation state mutations', async () => {
+    mocks.proxy.mockClear();
+    const checkout = await checkoutPost(new NextRequest('http://localhost/api/evaluation/checkout', {
       method: 'POST',
       body: JSON.stringify({
         checkoutSessionId: 'cs_test',
@@ -90,11 +95,29 @@ describe('evaluation web proxy routes', () => {
       }),
       headers: { 'Content-Type': 'application/json' },
     }));
-    expect(mocks.proxy).toHaveBeenLastCalledWith(
-      '/v1/evaluation/checkout',
-      'POST',
-      { checkoutSessionId: 'cs_test', amountCents: 100, eventId: 'evt_test' },
-    );
+    const deposit = await depositPost(new NextRequest('http://localhost/api/evaluation/deposit', {
+      method: 'POST',
+      body: JSON.stringify({ transactionHash: 'a'.repeat(64), confirmedAt: Date.now() }),
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const checkoutStatus = await checkoutStatusPost(new NextRequest(
+      'http://localhost/api/evaluation/checkout/status',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          checkoutSessionId: 'cs_test',
+          status: 'confirmed',
+          transactionHash: 'a'.repeat(64),
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      },
+    ));
+
+    expect(checkout.status).toBe(405);
+    expect(checkout.headers.get('allow')).toBe('GET');
+    expect(deposit.status).toBe(405);
+    expect(checkoutStatus.status).toBe(405);
+    expect(mocks.proxy).not.toHaveBeenCalled();
   });
 
   it('proxies status reads without accepting client identity', async () => {

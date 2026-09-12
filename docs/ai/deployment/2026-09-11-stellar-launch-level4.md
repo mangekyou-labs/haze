@@ -13,10 +13,13 @@ Status: local implementation complete; no deployment claimed
 ## Configuration boundary
 
 The web service owns `EVALUATION_HMAC_SECRET`, NextAuth/GitHub credentials,
-Stripe test credentials, and the PostHog browser key. Gateway and fee sponsor
-receive only their existing secrets/configuration plus the derived participant
-ID on authenticated internal requests. A restricted Postgres database is
-required for production evaluation persistence.
+Stripe test credentials (`sk_test_`), and the PostHog browser key. Gateway and
+fee sponsor receive only their existing secrets/configuration plus
+`EVALUATION_PURGE_SECRET` / `EVALUATION_PURGE_INTERVAL_MS` on the gateway and
+the derived participant ID on authenticated internal requests. The gateway
+never receives `EVALUATION_HMAC_SECRET`. A restricted Postgres database is
+required for production evaluation persistence. `.env.example` and
+`web/.env.example` list these names; they are not populated in this worktree.
 
 No mnemonic, private wallet key, raw signature, proof, prompt, API key, or
 GitHub subject belongs in environment output, Stripe metadata, telemetry,

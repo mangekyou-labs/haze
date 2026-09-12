@@ -102,4 +102,20 @@ describe('evaluation checkout route', () => {
     expect(response.status).toBe(400);
     expect(mocks.create).not.toHaveBeenCalled();
   });
+
+  it('does not expose provider exception details to clients or logs', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.create.mockRejectedValue(new Error('provider failure participant_secret=do-not-log'));
+
+    const response = await POST(new NextRequest('http://localhost/api/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ tier: 'starter' }),
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: 'stripe_error' });
+    expect(consoleError).toHaveBeenCalledWith('Stripe checkout request failed');
+    expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining('participant_secret'));
+  });
 });

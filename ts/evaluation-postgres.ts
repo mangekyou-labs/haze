@@ -17,6 +17,7 @@ import {
   type ValidatedFeedback,
   type WalletProof,
   type WalletVerificationResult,
+  fingerprintWalletAddress,
   redactWalletAddress,
   validateFeedback,
   verifyWalletProof,
@@ -27,12 +28,21 @@ export interface SqlResult<Row extends Record<string, unknown> = Record<string, 
   rowCount?: number | null;
 }
 
-/** The narrow pool contract lets unit tests inject a query fake. */
+export interface SqlClient {
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<SqlResult<Row>>;
+  release(): void;
+}
+
+/** The narrow pool contract lets integration tests inject controlled query behavior. */
 export interface SqlPool {
   query<Row extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
     values?: readonly unknown[],
   ): Promise<SqlResult<Row>>;
+  connect(): Promise<SqlClient>;
 }
 
 interface ParticipantRow extends Record<string, unknown> {
@@ -42,6 +52,7 @@ interface ParticipantRow extends Record<string, unknown> {
   enrolled_at: Date | string;
   retention_deadline: Date | string;
   wallet_address: string | null;
+  wallet_fingerprint: string | null;
   wallet_signature: string | null;
   wallet_verified_at: Date | string | null;
   deposit_tx_hash: string | null;
@@ -147,7 +158,7 @@ function rowToStatus(row: ParticipantRow): EvaluationStatus {
     enrolledAt: new Date(restricted.enrolledAtMs).toISOString(),
     retentionDeadline: new Date(restricted.retentionDeadlineMs).toISOString(),
     wallet: {
-      verified: restricted.walletAddress !== null && restricted.walletVerifiedAtMs !== null,
+      verified: restricted.walletVerifiedAtMs !== null,
       addressRedacted: restricted.walletAddress ? redactWalletAddress(restricted.walletAddress) : null,
     },
     deposit: {
@@ -157,8 +168,7 @@ function rowToStatus(row: ParticipantRow): EvaluationStatus {
       newRoot: restricted.depositNewRoot,
     },
     feedbackSubmitted: restricted.feedback !== null,
-    complete: restricted.walletAddress !== null
-      && restricted.walletVerifiedAtMs !== null
+    complete: restricted.walletVerifiedAtMs !== null
       && restricted.depositConfirmedAtMs !== null
       && restricted.feedback !== null,
   };
@@ -257,16 +267,6 @@ export class PostgresEvaluationStore implements EvaluationStore {
   async createChallenge(participantId: string): Promise<Challenge> {
     const participant = await this.participant(participantId);
     const now = new Date(this.currentTime());
-    const recent = await this.pool.query<{ count: string }>(
-      `SELECT count(*)::text AS count
-         FROM evaluation.wallet_challenges
-        WHERE participant_id = $1 AND created_at >= $2`,
-      [participantId, new Date(now.getTime() - 15 * 60 * 1000)],
-    );
-    if (Number(recent.rows[0]?.count ?? 0) >= 5) {
-      throw new EvaluationError('rate_limited', 'Too many wallet challenges');
-    }
-
     const id = this.challengeId();
     const expiresAt = new Date(now.getTime() + CHALLENGE_TTL_MS);
     const message = [
@@ -276,13 +276,36 @@ export class PostgresEvaluationStore implements EvaluationStore {
       'Network: stellar:testnet',
       `Expires: ${expiresAt.toISOString()}`,
     ].join('\n');
-    await this.pool.query(
-      `INSERT INTO evaluation.wallet_challenges
-        (challenge_id, participant_id, message, created_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [id, participantId, message, now, expiresAt],
-    );
-    return { id, message, expiresAt: expiresAt.toISOString() };
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        'SELECT participant_id FROM evaluation.participants WHERE participant_id = $1 FOR UPDATE',
+        [participantId],
+      );
+      const recent = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+           FROM evaluation.wallet_challenges
+          WHERE participant_id = $1 AND created_at >= $2`,
+        [participantId, new Date(now.getTime() - 15 * 60 * 1000)],
+      );
+      if (Number(recent.rows[0]?.count ?? 0) >= 5) {
+        throw new EvaluationError('rate_limited', 'Too many wallet challenges');
+      }
+      await client.query(
+        `INSERT INTO evaluation.wallet_challenges
+          (challenge_id, participant_id, message, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, participantId, message, now, expiresAt],
+      );
+      await client.query('COMMIT');
+      return { id, message, expiresAt: expiresAt.toISOString() };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async verifyWallet(
@@ -309,14 +332,15 @@ export class PostgresEvaluationStore implements EvaluationStore {
       throw new EvaluationError('wallet_proof_invalid', 'Wallet proof could not be verified');
     }
 
+    const walletFingerprint = fingerprintWalletAddress(proof.address);
     const owner = await this.pool.query<{ participant_id: string }>(
-      'SELECT participant_id FROM evaluation.participants WHERE wallet_address = $1',
-      [proof.address],
+      'SELECT participant_id FROM evaluation.participants WHERE wallet_fingerprint = $1',
+      [walletFingerprint],
     );
     if (owner.rows[0] && owner.rows[0].participant_id !== participantId) {
       throw new EvaluationError('wallet_already_used', 'Wallet is already enrolled');
     }
-    if (participant.wallet_address && participant.wallet_address !== proof.address) {
+    if (participant.wallet_fingerprint && participant.wallet_fingerprint !== walletFingerprint) {
       throw new EvaluationError('wallet_already_used', 'Participant already has a different wallet');
     }
 
@@ -330,12 +354,25 @@ export class PostgresEvaluationStore implements EvaluationStore {
     if (challengeUpdate.rowCount !== 1) {
       throw new EvaluationError('challenge_replayed', 'Wallet challenge has already been used');
     }
+    if (participant.wallet_fingerprint === walletFingerprint) {
+      if (participant.wallet_verified_at === null) {
+        throw new EvaluationError('wallet_proof_invalid', 'Wallet verification state is invalid');
+      }
+      return {
+        verified: true,
+        addressRedacted: redactWalletAddress(proof.address),
+        verifiedAt: new Date(participant.wallet_verified_at).toISOString(),
+      };
+    }
     try {
       const participantUpdate = await this.pool.query(
         `UPDATE evaluation.participants
-            SET wallet_address = $1, wallet_signature = $2, wallet_verified_at = $3, updated_at = $3
-          WHERE participant_id = $4 AND (wallet_address IS NULL OR wallet_address = $1)`,
-        [proof.address, proof.signature, verifiedAt, participantId],
+            SET wallet_address = $1, wallet_fingerprint = $2, wallet_signature = $3,
+                wallet_verified_at = $4, updated_at = $4
+          WHERE participant_id = $5
+            AND ((wallet_fingerprint IS NULL AND (wallet_address IS NULL OR wallet_address = $1))
+              OR wallet_fingerprint = $2)`,
+        [proof.address, walletFingerprint, proof.signature, verifiedAt, participantId],
       );
       if (participantUpdate.rowCount !== 1) {
         throw new EvaluationError('wallet_already_used', 'Participant already has a different wallet');
@@ -360,7 +397,7 @@ export class PostgresEvaluationStore implements EvaluationStore {
     options: { newRoot?: string; confirmedAt?: number } = {},
   ): Promise<EvaluationStatus> {
     const participant = await this.participant(participantId);
-    if (!participant.wallet_address) {
+    if (participant.wallet_verified_at === null) {
       throw new EvaluationError('wallet_not_verified', 'Wallet verification is required first');
     }
     if (typeof transactionHash !== 'string' || !/^[a-f0-9]{64}$/i.test(transactionHash)) {
@@ -401,7 +438,7 @@ export class PostgresEvaluationStore implements EvaluationStore {
 
   async submitFeedback(participantId: string, input: Partial<FeedbackInput>): Promise<EvaluationStatus> {
     const participant = await this.participant(participantId);
-    if (!participant.wallet_address || !participant.deposit_tx_hash) {
+    if (participant.wallet_verified_at === null || !participant.deposit_tx_hash) {
       throw new EvaluationError('feedback_not_ready', 'Wallet verification and deposit are required first');
     }
     const validated = validateFeedback(input);
@@ -499,32 +536,29 @@ export class PostgresEvaluationStore implements EvaluationStore {
       && (typeof input.transactionHash !== 'string' || !/^[a-f0-9]{64}$/i.test(input.transactionHash))) {
       throw new EvaluationError('invalid_transaction_hash', 'A Stellar transaction hash is required');
     }
-    const current = await this.pool.query<CheckoutRow>(
-      `SELECT * FROM evaluation.checkout_receipts
-        WHERE checkout_session_id = $1 AND participant_id = $2`,
-      [checkoutSessionId, participantId],
-    );
-    if (!current.rows[0]) throw new EvaluationError('checkout_not_found', 'Checkout receipt was not found');
-    if (current.rows[0].processing_status === 'confirmed') return rowToCheckout(current.rows[0]);
     const processedAt = input.status === 'pending' || input.status === 'processing'
       ? null
       : new Date(this.currentTime());
-    await this.pool.query(
+    const updated = await this.pool.query<CheckoutRow>(
       `UPDATE evaluation.checkout_receipts
           SET processing_status = $1, deposit_tx_hash = COALESCE($2, deposit_tx_hash),
               new_root = COALESCE($3, new_root),
               processing_started_at = CASE WHEN $1 = 'processing' THEN $5::timestamptz ELSE NULL END,
               processed_at = $4, updated_at = $5
-        WHERE checkout_session_id = $6 AND participant_id = $7`,
+        WHERE checkout_session_id = $6 AND participant_id = $7
+          AND processing_status <> 'confirmed'
+       RETURNING *`,
       [input.status, input.transactionHash?.toLowerCase() ?? null, input.newRoot ?? null, processedAt,
         new Date(this.currentTime()), checkoutSessionId, participantId],
     );
-    const updated = await this.pool.query<CheckoutRow>(
+    if (updated.rows[0]) return rowToCheckout(updated.rows[0]);
+
+    const current = await this.pool.query<CheckoutRow>(
       'SELECT * FROM evaluation.checkout_receipts WHERE checkout_session_id = $1 AND participant_id = $2',
       [checkoutSessionId, participantId],
     );
-    if (!updated.rows[0]) throw new EvaluationError('checkout_not_found', 'Checkout receipt was not found');
-    return rowToCheckout(updated.rows[0]);
+    if (!current.rows[0]) throw new EvaluationError('checkout_not_found', 'Checkout receipt was not found');
+    return rowToCheckout(current.rows[0]);
   }
 
   async getCheckout(participantId: string, checkoutSessionId: string): Promise<CheckoutReceipt> {

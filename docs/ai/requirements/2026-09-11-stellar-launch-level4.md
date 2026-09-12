@@ -68,26 +68,38 @@ can later be represented in a redacted ten-person evidence export.
    exact consent version, and a changed version is rejected.
 2. **Persistence and retention.** Evaluation tables are isolated under the
    `evaluation` schema. Raw wallet address/signature material is retained for
-   90 days, then nulled by scheduled purge while safe aggregate completion
-   data remains. Migrations are idempotent and run twice safely.
+   90 days, then nulled by scheduled purge while `wallet_fingerprint` (SHA-256,
+   unique 64-hex) and safe aggregate completion data remain. Same-wallet
+   re-verify after purge is idempotent and does not restore raw proof columns.
+   Public status keys `wallet.verified` on `wallet_verified_at`. Migrations
+   are idempotent and run twice safely.
 3. **Wallet proof.** Challenges contain a server-generated canonical SEP-53
    message, expire after ten minutes, are single-use, and are rate limited to
-   five creations per fifteen minutes. Proofs must be canonical 64-byte
+   five creations per fifteen minutes. The Postgres adapter counts that window
+   inside a participant-row lock (`SELECT … FOR UPDATE`) so concurrent
+   creations cannot exceed the limit. Proofs must be canonical 64-byte
    signatures for a valid G address on Stellar Testnet. Wallets cannot be
    shared or replaced.
 4. **Deposit and feedback.** A deposit link requires a verified wallet and a
    valid unique 64-hex transaction hash. Feedback requires wallet verification
    and a confirmed deposit; rating, booleans, bounded text, and quote consent
    are validated. Public status never includes raw proof material.
-5. **Checkout and billing.** Evaluation checkout is exactly $1 in Stripe test
-   mode and cannot attach participant metadata until enrollment and a valid
-   browser-held commitment are present. Checkout ownership and idempotency are
-   durable. Processed webhook duplicates are acknowledged; failed/unprocessed
-   events resume safely; concurrent retries never double-submit a deposit.
+5. **Checkout and billing.** Evaluation checkout is exactly $1 (`amount_cents
+   = 100`) in Stripe test mode (`sk_test_`) and cannot attach participant
+   metadata until enrollment and a valid browser-held commitment are present.
+   Checkout ownership and idempotency are durable. `confirmed` receipts are
+   monotonic and cannot be downgraded. Processed webhook duplicates are
+   acknowledged. Failed or unprocessed events retry through `claimCheckout`.
+   Concurrent retries never insert a second membership leaf. If the process
+   dies after Stellar accepts the deposit and before the receipt stores the
+   hash, the original hash cannot be rebuilt without a chain reconciler; that
+   window is documented, not papered over. Browser POSTs to
+   `/api/evaluation/checkout`, `/checkout/status`, and `/deposit` return 405.
 6. **Evidence.** Export refuses fewer than ten complete records or duplicate
-   wallets/transactions. It emits only public participant codes, redacted
-   wallets, transaction hashes/links, completion times, and aggregate
-   feedback.
+   wallets/transactions. Completeness for export still requires a raw wallet
+   address, so post-purge records do not export. It emits only public
+   participant codes, redacted wallets, transaction hashes/links, completion
+   times, and aggregate feedback.
 7. **Telemetry.** PostHog is opt-in only with a closed coarse event/property
    allowlist and logout reset. Sentry scrubbing recursively removes sensitive
    nested fields in all three services before send.

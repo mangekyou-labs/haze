@@ -4,10 +4,11 @@ import { Pool } from 'pg';
 import { runMigrations } from './db/migrate.js';
 import {
   EVALUATION_CONSENT_VERSION,
+  RETENTION_MS,
   buildSep53PayloadDigest,
   deriveParticipantIdentity,
 } from './evaluation.js';
-import { PostgresEvaluationStore } from './evaluation-postgres.js';
+import { PostgresEvaluationStore, type SqlPool } from './evaluation-postgres.js';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL || 'postgres://localhost:5432/zk_credits_test';
 const MIGRATIONS_DIR = new URL('./db/migrations', import.meta.url).pathname;
@@ -162,5 +163,124 @@ describe.skipIf(!dbTestsEnabled)('PostgresEvaluationStore (integration, requires
       claimed: true,
       receipt: { processingStatus: 'processing' },
     });
+  });
+
+  it('never lets a stale checkout worker downgrade a confirmed receipt', async () => {
+    const participant = deriveParticipantIdentity('postgres-checkout-monotonic', 'secret');
+    const store = new PostgresEvaluationStore(pool);
+    await store.enroll(participant.fullId, EVALUATION_CONSENT_VERSION);
+    await store.recordCheckout(participant.fullId, {
+      checkoutSessionId: 'cs_postgres_monotonic',
+      amountCents: 100,
+      eventId: 'evt_postgres_monotonic',
+    });
+
+    let releaseUpdate!: () => void;
+    let signalUpdate!: () => void;
+    const updateReleased = new Promise<void>((resolve) => { releaseUpdate = resolve; });
+    const updateStarted = new Promise<void>((resolve) => { signalUpdate = resolve; });
+    const delayedPool: SqlPool = {
+      connect: () => pool.connect(),
+      async query<Row extends Record<string, unknown> = Record<string, unknown>>(
+        text: string,
+        values?: readonly unknown[],
+      ) {
+        if (/UPDATE evaluation\.checkout_receipts[\s\S]*SET processing_status = \$1/.test(text)
+          && values?.[0] === 'failed') {
+          signalUpdate();
+          await updateReleased;
+        }
+        return pool.query<Row>(text, values as unknown[] | undefined);
+      },
+    };
+    const staleStore = new PostgresEvaluationStore(delayedPool);
+    const staleFailure = staleStore.markCheckout(participant.fullId, 'cs_postgres_monotonic', {
+      status: 'failed',
+    });
+    await updateStarted;
+    await store.markCheckout(participant.fullId, 'cs_postgres_monotonic', {
+      status: 'confirmed',
+      transactionHash: 'f'.repeat(64),
+    });
+    releaseUpdate();
+
+    await expect(staleFailure).resolves.toMatchObject({ processingStatus: 'confirmed' });
+    await expect(store.getCheckout(participant.fullId, 'cs_postgres_monotonic')).resolves.toMatchObject({
+      processingStatus: 'confirmed',
+      transactionHash: 'f'.repeat(64),
+    });
+  });
+
+  it('retains completion and wallet ownership after raw proof purge', async () => {
+    let now = 1_700_000_000_000;
+    let challengeSequence = 0;
+    const store = new PostgresEvaluationStore(pool, {
+      now: () => now,
+      id: () => `challenge-retention-${challengeSequence += 1}`,
+    });
+    const first = deriveParticipantIdentity('postgres-retention-owner-1', 'secret');
+    const second = deriveParticipantIdentity('postgres-retention-owner-2', 'secret');
+    await store.enroll(first.fullId, EVALUATION_CONSENT_VERSION);
+    await store.enroll(second.fullId, EVALUATION_CONSENT_VERSION);
+
+    const wallet = Keypair.random();
+    const challenge = await store.createChallenge(first.fullId);
+    await store.verifyWallet(first.fullId, {
+      challengeId: challenge.id,
+      address: wallet.publicKey(),
+      signature: wallet.sign(buildSep53PayloadDigest(challenge.message)).toString('base64'),
+      network: 'testnet',
+    });
+    await store.linkDeposit(first.fullId, '9'.repeat(64));
+    await store.submitFeedback(first.fullId, {
+      easeRating: 5,
+      taskCompleted: true,
+      wouldUseAgain: true,
+      mostValuableAspect: 'privacy',
+      biggestFriction: 'none',
+      quoteConsent: false,
+    });
+
+    now += RETENTION_MS + 1;
+    await store.purgeExpired();
+    await expect(store.getStatus(first.fullId)).resolves.toMatchObject({
+      wallet: { verified: true, addressRedacted: null },
+      complete: true,
+    });
+
+    const repeatChallenge = await store.createChallenge(first.fullId);
+    await expect(store.verifyWallet(first.fullId, {
+      challengeId: repeatChallenge.id,
+      address: wallet.publicKey(),
+      signature: wallet.sign(buildSep53PayloadDigest(repeatChallenge.message)).toString('base64'),
+      network: 'testnet',
+    })).resolves.toMatchObject({ verified: true });
+    const restricted = await store.listRestrictedRecords();
+    expect(restricted.find((record) => record.participantId === first.fullId)).toMatchObject({
+      walletAddress: null,
+      walletSignature: null,
+      anonymizedAtMs: now,
+    });
+
+    const duplicateChallenge = await store.createChallenge(second.fullId);
+    await expect(store.verifyWallet(second.fullId, {
+      challengeId: duplicateChallenge.id,
+      address: wallet.publicKey(),
+      signature: wallet.sign(buildSep53PayloadDigest(duplicateChallenge.message)).toString('base64'),
+      network: 'testnet',
+    })).rejects.toMatchObject({ code: 'wallet_already_used' });
+  });
+
+  it('enforces the rolling challenge limit under concurrent requests', async () => {
+    const participant = deriveParticipantIdentity('postgres-challenge-rate-race', 'secret');
+    const store = new PostgresEvaluationStore(pool);
+    await store.enroll(participant.fullId, EVALUATION_CONSENT_VERSION);
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 6 }, () => store.createChallenge(participant.fullId)),
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(5);
+    expect(results.filter((result) => result.status === 'rejected'))
+      .toEqual([expect.objectContaining({ reason: expect.objectContaining({ code: 'rate_limited' }) })]);
   });
 });

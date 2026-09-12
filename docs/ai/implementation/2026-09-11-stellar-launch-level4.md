@@ -20,7 +20,11 @@ facts only; donor-worktree claims and stale screenshots are not evidence.
   ticket allocation.
 - Reuse the initialized gateway Pool for evaluation Postgres state.
 - Keep `EVALUATION_HMAC_SECRET` server-side in web only.
+- Keep `EVALUATION_PURGE_SECRET` on the gateway only; never reuse `GATEWAY_SECRET`.
 - Never export or send raw wallet/signature/subject/request material.
+- Do not claim crash-after-accept as resume-without-resubmit. Tree
+  reconstruction blocks a second leaf; receipt hash needs a reconciler that
+  this milestone does not include.
 
 ## Task record
 
@@ -223,20 +227,66 @@ Fresh evidence:
 
 ### T8 — final verification and lifecycle reconciliation (complete locally)
 
-The clean Level 4 worktree passed the final cross-package verification matrix:
+T8 originally recorded a clean-tree matrix of 196 gateway tests / 60 web tests
+/ 5 Postgres cases. Phase 7 remediations below supersede those counts. Hosted
+deployment, cohort, fresh screenshots/video, telemetry exports, and GitHub
+publication remain external acceptance gates until their credentials and
+direct evidence exist.
 
-- Gateway typecheck and full tests: 22 files, 196 tests passed, 16 skipped;
-  disposable Postgres migration/persistence/ownership/claim suite: 5 passed.
-- Web tests: 20 files, 60 tests; typecheck, lint (zero errors), production
-  build, and all 17 Playwright E2E tests passed.
-- Shared package (23 tests), sidecar (64 tests plus pack dry-run), fee sponsor
-  typecheck/tests, circuit suite, synthetic monitor, and Soroban `cargo +1.94`
-  suite (24 tests) passed.
+### Phase 7 remediations (complete locally)
 
-The final requirement audit confirms the exact consent and identity boundary,
-isolated migration/persistence, SEP-53/retention/ownership invariants,
-consent-gated billing retry behavior, telemetry privacy controls, synthetic CI
-wiring, and unchanged launch-era staged deposit/indexed-ticket behavior.
-`git diff --check` passed. Hosted deployment, cohort, fresh screenshots/video,
-telemetry exports, and GitHub publication remain external acceptance gates
-until their credentials and direct evidence exist.
+Check Implementation found local design gaps after T8. The target worktree
+now includes:
+
+- `wallet_fingerprint` (SHA-256, unique 64-hex) retained after 90-day raw
+  proof purge; same-wallet re-verify is idempotent and does not restore
+  address/signature; a different wallet still fails `wallet_already_used`.
+- Public status keys `wallet.verified` and `complete` on
+  `wallet_verified_at`. Evidence `isComplete` still requires a raw wallet
+  address, so post-purge records do not export.
+- Monotonic `markCheckout` / `claimCheckout`: `confirmed` cannot be
+  downgraded (`processing_status <> 'confirmed'`).
+- Transactional challenge rate-limit: `connect` / `BEGIN` /
+  `SELECT … FOR UPDATE` then count the last 15 minutes.
+- Checkout amount is exactly 100 cents (`amount_cents = 100`,
+  `EVALUATION_CHECKOUT_AMOUNT_CENTS`) and evaluation Stripe requires
+  `sk_test_`.
+- Browser POSTs on `/api/evaluation/checkout`, `/checkout/status`, and
+  `/deposit` return 405 via `evaluationMethodNotAllowed` (`Allow: GET` on
+  checkout; `Allow: OPTIONS` on the mutation-only POSTs). App Router
+  handlers take `NextRequest` so `tsc` accepts the tests.
+- Stripe/billing errors return a stable public code only (`stripe_error`,
+  `billing_event_failed`); exception text is not leaked.
+- `.env.example`, `web/.env.example`, and `render.yaml` document
+  `EVALUATION_HMAC_SECRET` (web only) and `EVALUATION_PURGE_SECRET`
+  (gateway only).
+- Crash-window honesty: if Stellar accepts the deposit and the process dies
+  before the receipt stores the hash, tree reconstruction prevents a second
+  leaf, but the hash cannot be rebuilt without a chain reconciler. No
+  reconciler was added.
+
+This-session local matrix (2026-09-12, logs in `/tmp/stellar-l4-matrix/`):
+
+- `npx ai-devkit@latest lint --feature stellar-launch`: EXIT 0. This
+  validates the 2026-08-04 `feature-stellar-launch` document set and that
+  `.worktrees/feature-stellar-launch` exists; it does not lint the
+  2026-09-11-stellar-launch-level4 filenames.
+- Gateway typecheck EXIT 0; `cd ts && npm test`: 22 files passed | 4
+  skipped (26); 198 passed | 19 skipped (217).
+- Disposable Postgres
+  `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts`:
+  8 passed (migration twice, persistence, concurrent ownership, claim/reclaim,
+  monotonic confirmed, post-purge ownership, concurrent challenge limit).
+- Web tests: 20 files, 62 passed. Web typecheck initially failed
+  `TS2554` on 405 POSTs with no request argument; handlers now take
+  `POST(_req: NextRequest)` and typecheck EXIT 0. Lint: 0 errors, 6 existing
+  warnings. Build EXIT 0 (Next.js lockfile-root warning only). E2E
+  `E2E_PORT=3210 npm run test:e2e`: 17 passed, including mocked
+  `e2e/level4.spec.ts`.
+- Shared package 23 tests; sidecar 64 tests plus pack dry-run; fee sponsor
+  typecheck and 1 test; circuits all passed; synthetic monitor 3 tests;
+  `cargo +1.94 test` 24 passed (6 existing `unused_mut` warnings).
+
+Hosted Level 4 deploy of this code, 10-person cohort, exporter, hosted
+screenshots, and demonstration remain unset. The donor
+`feature-zk-api-credits` tree is not the submit candidate.

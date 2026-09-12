@@ -1462,10 +1462,9 @@ app.post('/v1/billing/stripe-event', async (req: Request, res: Response) => {
     // Non-checkout event types are recorded but require no deposit.
     await billingStore.markStripeEventProcessed(eventId);
     res.json({ received: true, processed: true, eventId });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'unknown';
-    console.error('/v1/billing/stripe-event error:', message);
-    res.status(500).json({ error: 'billing_event_failed', message });
+  } catch {
+    console.error('/v1/billing/stripe-event failed');
+    res.status(500).json({ error: 'billing_event_failed' });
   }
 });
 

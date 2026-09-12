@@ -31,6 +31,7 @@ its full diff and lockfiles are not applied.
 | T6 | Dashboard evaluation flow and privacy telemetry | complete | web unit/E2E; PostHog/Sentry scrub tests |
 | T7 | Fee-sponsor Sentry, synthetic CI, locks, operations/evidence docs | complete | service typecheck; workflow/script checks; docs audit |
 | T8 | Full verification and final review reconciliation | complete locally | fresh command matrix and requirement audit |
+| T8 follow-up | Phase 7 remediations: fingerprint, monotonic checkout, 405 mutations, transactional challenge limit, `$1`/test-mode gates, crash-window honesty | complete locally | this-session matrix; hosted gates still pending |
 
 ## Per-task workflow
 
@@ -48,3 +49,6 @@ Stripe ingress, Sentry/PostHog screenshots, three hosted synthetic passes,
 fresh deployed screenshots, and ten consenting participants remain explicit
 external gates for T8; local verification records those gates as pending when
 the required credentials or hosted resources are absent.
+
+The Phase 7 remediations close local design gaps found during Check
+Implementation. They do not convert hosted gates into local passes.

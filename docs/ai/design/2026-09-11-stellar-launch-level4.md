@@ -31,10 +31,18 @@ Postgres evaluation adapter. Tests explicitly inject memory or a disposable
 SQL pool. The new `evaluation` schema is never joined to gateway request data.
 
 The evaluation migration creates participants, wallet challenges, and checkout
-receipts with unique constraints and retention/completion indexes. Checkout
-processing uses durable ownership and an atomic claim/compare-and-set so a
-crashed or failed unprocessed event can resume without a second on-chain
-submission.
+receipts with unique constraints and retention/completion indexes. Wallet
+ownership uses a SHA-256 `wallet_fingerprint` (unique 64-hex) so raw address
+and signature columns can be nulled after 90 days without allowing reuse.
+Checkout processing uses durable ownership, a five-minute claim lease, and a
+monotonic `markCheckout` that cannot downgrade `confirmed`. If
+`submitDeposit` returns and `markCheckout(confirmed, txHash)` persists, a
+retry repairs participant linkage without submitting again. If the process
+dies after Stellar accepts the deposit and before the receipt stores the
+hash, membership-tree reconstruction prevents a second leaf for the same
+commitment, but the original transaction hash cannot be rebuilt without a
+chain reconciler. This milestone documents that window; it does not add a
+reconciler.
 
 ## Gateway boundary
 
@@ -57,10 +65,18 @@ secret. The dashboard adds a separate evaluation card and retains the current
 onboarding, API-key, usage, playground, and purchase components.
 
 The evaluation Stripe session is created only after the current participant is
-enrolled and the request contains a valid browser-held commitment. Stripe
+enrolled, Stripe is in test mode (`sk_test_`), and the request contains a
+valid browser-held commitment. The session is exactly 100 cents. Stripe
 metadata contains only the opaque participant ID/code, tier, amount, and
 commitment needed by the existing deposit path. No subject, wallet, signature,
 prompt, proof, or API key is attached.
+
+Browser POSTs to `/api/evaluation/checkout`, `/api/evaluation/checkout/status`,
+and `/api/evaluation/deposit` return 405. Checkout and deposit mutation stay
+on the authenticated Stripe webhook and gateway claim path. Public status
+keys `wallet.verified` on `wallet_verified_at`, so completion can remain true
+after raw proof purge with `addressRedacted: null`. Evidence export still
+requires a raw wallet address, so post-purge records do not export.
 
 ## Observability and operations
 

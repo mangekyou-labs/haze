@@ -67,9 +67,12 @@ created by `initDurableGatewayStore`, runs the existing migration runner over
 
 The new `evaluation` schema contains participants, one-time wallet
 challenges, and ownership-bound checkout receipts. Unique constraints cover
-participant IDs, public codes, wallets, deposit transaction hashes, and
-checkout session IDs. Raw wallet addresses and signatures are restricted
-columns and are nulled by the scheduled retention purge.
+participant IDs, public codes, `wallet_fingerprint`, deposit transaction
+hashes, and checkout session IDs. Raw wallet addresses and signatures are
+restricted columns and are nulled by the scheduled retention purge. The
+fingerprint (SHA-256 of the address, 64-hex) stays so the same wallet cannot
+be bound to another participant after purge. Same-wallet re-verify is
+idempotent and does not restore raw proof columns.
 
 The target's existing `db/client.ts`, `db/config.ts`, `db/migrate.ts`, and
 gateway store are preserved. The donor's parallel database configuration and
@@ -80,7 +83,9 @@ migration files are not copied over them.
 - Enrollment is stable for the same participant and rejects a changed consent
   version.
 - Challenges expire after ten minutes, are single-use, and are rate limited
-  to five creations per rolling fifteen minutes per participant.
+  to five creations per rolling fifteen minutes per participant. The Postgres
+  adapter serializes that count with `SELECT … FOR UPDATE` on the participant
+  row.
 - A participant can bind one wallet; a wallet can belong to only one
   participant. Wallet replacement is rejected.
 - Deposits require a verified wallet, accept a canonical 64-hex transaction
@@ -89,11 +94,18 @@ migration files are not copied over them.
 - Feedback requires wallet verification and a linked confirmed deposit. The
   six fields are validated and bounded at the gateway boundary.
 - Checkout receipts are ownership-bound and idempotent. A confirmed receipt is
-  immutable; concurrent requests cannot create two deposit submissions for
-  one checkout.
+  immutable (`markCheckout` and `claimCheckout` refuse to leave `confirmed`).
+  Concurrent requests cannot create two membership leaves for one checkout.
+  If Stellar accepts the deposit and the process dies before the receipt
+  stores the hash, tree reconstruction still blocks a second leaf, but the
+  hash cannot be rebuilt without a chain reconciler. This milestone does not
+  add a reconciler.
 - Evidence requires at least ten complete records with ten unique wallets and
-  ten unique transaction hashes. Exported wallets are redacted and raw proof
-  material, subjects, and private API data are absent.
+  ten unique transaction hashes. Export completeness still requires a raw
+  wallet address, so post-purge records do not count. Exported wallets are
+  redacted and raw proof material, subjects, and private API data are absent.
+  Public status may still show `wallet.verified` and `complete` after purge
+  because those flags key on `wallet_verified_at`.
 
 ### Internal routes
 
@@ -130,9 +142,11 @@ extended so:
 - an unprocessed event is eligible for retry/resumption;
 - evaluation receipts provide ownership and durable checkout state;
 - an atomic processing claim or equivalent durable compare-and-set prevents
-  concurrent webhook deliveries from double-submitting a deposit; and
+  concurrent webhook deliveries from inserting a second membership leaf;
 - a failed attempt leaves enough unprocessed state for Stripe retry rather
-  than falsely acknowledging the payment.
+  than falsely acknowledging the payment; and
+- the documented crash window after chain accept and before receipt hash
+  persistence is not treated as silent resume-without-resubmit.
 
 Non-evaluation checkout tiers and the launch billing contract retain their
 current behavior.
@@ -144,13 +158,18 @@ current behavior.
 - Add route handlers for enrollment, status, challenge, wallet proof,
   feedback, analytics opt-in, checkout receipt, and any required checkout
   status read path. No gateway secret or HMAC secret reaches the browser.
+  Browser POSTs to `/api/evaluation/checkout`, `/checkout/status`, and
+  `/deposit` return 405 (`Allow: GET` on checkout GET, `Allow: OPTIONS` on
+  the mutation-only POSTs).
 - Add the Level 4 surface to the current dashboard without removing launch
   onboarding, API-key configuration, playground, usage status, or purchase
   flows.
-- Gate the `$1` evaluation checkout on explicit consent/enrollment and a
-  browser-held commitment. Only then attach participant metadata to Stripe;
-  metadata contains opaque evaluation identifiers, never GitHub subjects,
-  wallet addresses, signatures, prompts, proofs, or API keys.
+- Gate the `$1` evaluation checkout on explicit consent/enrollment, Stripe
+  test mode (`sk_test_`), and a browser-held commitment. The Stripe session
+  amount is exactly 100 cents. Only then attach participant metadata to
+  Stripe; metadata contains opaque evaluation identifiers, never GitHub
+  subjects, wallet addresses, signatures, prompts, proofs, or API keys.
+  Stripe and billing error responses return a stable public code only.
 - Freighter integration checks Testnet, requests the stored challenge, accepts
   supported signature encodings, and sends only the proof fields needed for
   server verification.

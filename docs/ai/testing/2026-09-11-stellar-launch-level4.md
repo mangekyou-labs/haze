@@ -15,27 +15,30 @@ claims, development screenshots, and stale lockfile results are excluded.
 
 ## Local command matrix
 
+This-session matrix (2026-09-12) after Phase 7 remediations. Logs:
+`/tmp/stellar-l4-matrix/`. Do not reuse the earlier T8 196/60/5 counts.
+
 | Area | Command | Result |
 |---|---|---|
-| AI DevKit lint | `npx ai-devkit@latest lint --feature stellar-launch` | unavailable: this environment's CLI reported `unknown command` |
-| Gateway typecheck/tests | `cd ts && npm run typecheck && npm test` | pass (22 files; 196 tests passed, 16 skipped) |
-| Disposable Postgres | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (5 tests; migration twice, persistence, concurrent ownership, claim/reclaim) |
-| Web tests | `cd web && npm test` | pass (20 files; 60 tests) |
-| Web typecheck/lint/build | `cd web && npm run typecheck && npm run lint && npm run build` | pass; lint 0 errors and 6 existing warnings; build pass |
-| Web E2E | `cd web && npm run test:e2e` | pass (17 tests) |
+| AI DevKit lint | `npx ai-devkit@latest lint --feature stellar-launch` | EXIT 0. Validates 2026-08-04 `feature-stellar-launch` docs and `.worktrees/feature-stellar-launch`; does not lint 2026-09-11-stellar-launch-level4 filenames |
+| Gateway typecheck/tests | `cd ts && npm run typecheck && npm test` | pass (typecheck EXIT 0; 22 files passed, 4 skipped; 198 passed, 19 skipped) |
+| Disposable Postgres | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (8 tests; migration twice, persistence, concurrent ownership, claim/reclaim, monotonic confirmed, post-purge ownership, concurrent challenge limit) |
+| Web tests | `cd web && npm test` | pass (20 files; 62 tests) |
+| Web typecheck/lint/build | `cd web && npm run typecheck && npm run lint && npm run build` | typecheck initially `TS2554` on 405 POSTs; after `POST(_req: NextRequest)`, typecheck EXIT 0; lint 0 errors and 6 existing warnings; build EXIT 0 (Next.js lockfile-root warning) |
+| Web E2E | `E2E_PORT=3210 npm run test:e2e` | pass (17 tests, including mocked `e2e/level4.spec.ts`) |
 | Shared package | `cd packages/zk-credits-shared && npm ci && npm run build && npm test` | pass (build; 23 tests) |
 | Sidecar package | `cd packages/zk-credits-sidecar && npm ci && npm run build && npm test && npm pack --dry-run` | pass (build; 64 tests; pack dry-run) |
 | Fee sponsor | `cd services/fee-sponsor && npm run typecheck && npm test` | pass (typecheck; 1 test) |
 | Circuits | `cd circuits && npm ci && node scripts/test.js` | pass (circuit, RLN, withdrawal, and slash suites) |
-| Soroban contract | `cd zk-credits-contract && cargo +1.94 test` | pass (24 tests; existing warnings only) |
+| Soroban contract | `cd zk-credits-contract && cargo +1.94 test` | pass (24 tests; 6 existing `unused_mut` warnings) |
 | Synthetic monitor | `node --test scripts/level4-synthetic.test.mjs`; `node --check scripts/level4-synthetic.mjs` | pass (3 tests) |
-| Whitespace | `git diff --check` | pass |
+| Whitespace | `git diff --check` | pass (EXIT 0 after Phase 7 docs and remediations) |
 
 ## T1 narrow evidence
 
 | Behavior | Command | Result |
 |---|---|---|
-| Identity, consent, SEP-53, expiry/replay, rate limits, ownership, feedback, retention, checkout, redacted evidence | `cd ts && npm test -- --run evaluation.test.ts` | pass (13 tests) |
+| Identity, consent, SEP-53, expiry/replay, rate limits, ownership, feedback, retention, checkout, redacted evidence, post-purge ownership | `cd ts && npm test -- --run evaluation.test.ts` | pass (14 tests) |
 | Migration ordering/isolation and schema registry | `cd ts && npm test -- --run db/migrate.test.ts db/config.test.ts` | pass (14 tests; 1 opt-in database test skipped) |
 
 The failing-first evidence for T1 is recorded in the implementation document;
@@ -46,7 +49,7 @@ implemented. No external deployment or cohort evidence is claimed.
 
 | Behavior | Command | Result |
 |---|---|---|
-| Postgres migration twice, restart durability, and concurrent checkout/participant ownership | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (5 tests, disposable local cluster) |
+| Postgres migration twice, restart durability, concurrent ownership, monotonic confirmed, post-purge fingerprint, concurrent challenge limit | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (8 tests, disposable local cluster) |
 | Gateway lifecycle injection and evaluation adapter compile | `npm run typecheck` | pass |
 
 ## T3 narrow evidence
@@ -65,8 +68,8 @@ implemented. No external deployment or cohort evidence is claimed.
 ## T5 narrow evidence
 
 | Web participant identity, consent version, and commitment validation | `cd web && npm test -- --run src/lib/evaluation-identity.test.ts src/lib/evaluation-checkout.test.ts` | pass (4 tests) |
-| Authenticated proxy field allowlists and gateway transport headers | `cd web && npm test -- --run src/lib/evaluation-transport.test.ts src/app/api/evaluation/routes.test.ts` | pass (6 tests) |
-| Consent-gated evaluation checkout and launch starter regression | `cd web && npm test -- --run src/app/api/checkout/route.test.ts` | pass (3 tests) |
+| Authenticated proxy field allowlists, 405 browser mutations, and gateway transport headers | `cd web && npm test -- --run src/lib/evaluation-transport.test.ts src/app/api/evaluation/routes.test.ts` | pass (7 tests) |
+| Consent-gated evaluation checkout, launch starter regression, and no leaked Stripe exception text | `cd web && npm test -- --run src/app/api/checkout/route.test.ts` | pass (4 tests) |
 | Filtered Stripe relay payloads and receipt ownership | `cd web && npm test -- --run src/lib/stripe-relay.test.ts src/lib/evaluation-receipt.test.ts src/app/api/checkout/receipt/route.test.ts` | pass (6 tests) |
 | Web route type safety | `cd web && npm run typecheck` | pass |
 
@@ -91,18 +94,34 @@ implemented. No external deployment or cohort evidence is claimed.
 | Browser analytics regression after privacy fixes | `cd web && npm test -- --run src/lib/analytics.test.ts` | pass (6 tests) |
 | CI wiring | `.github/workflows/ci.yml`, `.github/workflows/deploy-smoke.yml` inspected; exact variables and branch trigger present | pass (static review); hosted variables not available locally |
 
+## Phase 7 remediation evidence
+
+| Behavior | Command | Result |
+|---|---|---|
+| Fingerprint ownership, post-purge idempotent re-verify, status keyed on `wallet_verified_at` | `cd ts && npm test -- --run evaluation.test.ts` | pass (14 tests, including post-purge ownership) |
+| Postgres monotonic confirmed, post-purge fingerprint, concurrent challenge `FOR UPDATE` | disposable cluster, 8 integration tests above | pass |
+| 405 browser mutations (`Allow: GET` on checkout POST) | `cd web && npm test -- --run src/app/api/evaluation/routes.test.ts src/app/api/checkout/route.test.ts` | pass (9 tests) |
+| App Router `POST(_req: NextRequest)` typecheck | `cd web && npm run typecheck` | pass after the handler signature fix |
+
 ## T8 final reconciliation
 
-The package-wide rows above were run from the clean Level 4 worktree. The
-requirement audit confirms the exact consent version and participant ID shape,
-isolated migration `0009`, testnet-only SEP-53 proof rules, 90-day purge,
-unique wallet/deposit/session ownership, retryable checkout claims, filtered
-Stripe relay metadata, opt-in telemetry, recursive scrubbing, and preservation
-of the launch-era deposit and ticket-allocation path.
+The package-wide rows above were run from the Level 4 worktree after Phase 7
+remediations. The requirement audit confirms the exact consent version and
+participant ID shape, isolated migration `0009`, `wallet_fingerprint` after
+purge, testnet-only SEP-53 proof rules, 90-day purge, unique
+wallet/deposit/session ownership, monotonic checkout claims, 405 browser
+mutations, transactional challenge limits, filtered Stripe relay metadata,
+opt-in telemetry, recursive scrubbing, and preservation of the launch-era
+deposit and ticket-allocation path.
+
+The crash window after chain accept and before receipt-hash persistence is
+documented; it is not claimed as resume-without-resubmit.
 
 External release artifacts remain pending until deployment credentials, hosted
 URLs, Stripe test ingress, telemetry access, fresh screenshots, and ten
-distinct consenting participants are available.
+distinct consenting participants are available. Hosted variables
+`LEVEL4_FRONTEND_URL`, `LEVEL4_GATEWAY_URL`, `LEVEL4_FEE_SPONSOR_URL`, Stripe,
+Sentry, `DATABASE_URL`, and evaluation secrets were unset in this session.
 
 ## Required behavior evidence
 
