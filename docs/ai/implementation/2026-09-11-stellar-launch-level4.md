@@ -290,3 +290,12 @@ This-session local matrix (2026-09-12, logs in `/tmp/stellar-l4-matrix/`):
 Hosted Level 4 deploy of this code, 10-person cohort, exporter, hosted
 screenshots, and demonstration remain unset. The donor
 `feature-zk-api-credits` tree is not the submit candidate.
+
+CI on GitHub Actions Node 24.20.0 / npm 11.19.0 failed `npm ci` for Web,
+Gateway, and Fee-sponsor (Fee-sponsor failed at the nested `ts/` install)
+with `Missing: @emnapi/runtime@1.11.3 from lock file` (Web also
+`@emnapi/core@1.11.3`). Local Node 24.10.0 / npm 11.6.1 did not require those
+optional peer entries. `ts/package-lock.json` and `web/package-lock.json`
+were regenerated with npm 11.19.0; `ci.yml` Node installs are pinned to
+24.20.0. Local `npx npm@11.19.0 ci --ignore-scripts` EXIT 0 for both
+packages. Hosted Actions rerun is the remaining CI evidence.
