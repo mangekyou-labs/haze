@@ -147,7 +147,7 @@ function rowToStatus(row: ParticipantRow): EvaluationStatus {
     enrolledAt: new Date(restricted.enrolledAtMs).toISOString(),
     retentionDeadline: new Date(restricted.retentionDeadlineMs).toISOString(),
     wallet: {
-      verified: restricted.walletVerifiedAtMs !== null,
+      verified: restricted.walletAddress !== null && restricted.walletVerifiedAtMs !== null,
       addressRedacted: restricted.walletAddress ? redactWalletAddress(restricted.walletAddress) : null,
     },
     deposit: {
@@ -157,7 +157,8 @@ function rowToStatus(row: ParticipantRow): EvaluationStatus {
       newRoot: restricted.depositNewRoot,
     },
     feedbackSubmitted: restricted.feedback !== null,
-    complete: restricted.walletVerifiedAtMs !== null
+    complete: restricted.walletAddress !== null
+      && restricted.walletVerifiedAtMs !== null
       && restricted.depositConfirmedAtMs !== null
       && restricted.feedback !== null,
   };
@@ -330,13 +331,17 @@ export class PostgresEvaluationStore implements EvaluationStore {
       throw new EvaluationError('challenge_replayed', 'Wallet challenge has already been used');
     }
     try {
-      await this.pool.query(
+      const participantUpdate = await this.pool.query(
         `UPDATE evaluation.participants
             SET wallet_address = $1, wallet_signature = $2, wallet_verified_at = $3, updated_at = $3
-          WHERE participant_id = $4`,
+          WHERE participant_id = $4 AND (wallet_address IS NULL OR wallet_address = $1)`,
         [proof.address, proof.signature, verifiedAt, participantId],
       );
+      if (participantUpdate.rowCount !== 1) {
+        throw new EvaluationError('wallet_already_used', 'Participant already has a different wallet');
+      }
     } catch (error) {
+      if (error instanceof EvaluationError) throw error;
       if (isUniqueViolation(error)) {
         throw new EvaluationError('wallet_already_used', 'Wallet is already enrolled');
       }
@@ -374,14 +379,18 @@ export class PostgresEvaluationStore implements EvaluationStore {
     }
     const confirmedAt = new Date(options.confirmedAt ?? this.currentTime());
     try {
-      await this.pool.query(
+      const participantUpdate = await this.pool.query(
         `UPDATE evaluation.participants
             SET deposit_tx_hash = $1, deposit_explorer_url = $2, deposit_new_root = $3,
                 deposit_confirmed_at = $4, updated_at = $4
-          WHERE participant_id = $5`,
+          WHERE participant_id = $5 AND (deposit_tx_hash IS NULL OR deposit_tx_hash = $1)`,
         [normalized, `https://stellar.expert/explorer/testnet/tx/${normalized}`, options.newRoot ?? null, confirmedAt, participantId],
       );
+      if (participantUpdate.rowCount !== 1) {
+        throw new EvaluationError('deposit_already_used', 'Participant already has a deposit linked');
+      }
     } catch (error) {
+      if (error instanceof EvaluationError) throw error;
       if (isUniqueViolation(error)) {
         throw new EvaluationError('deposit_already_used', 'Deposit transaction is already linked');
       }

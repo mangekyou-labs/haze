@@ -70,6 +70,46 @@ describe.skipIf(!dbTestsEnabled)('PostgresEvaluationStore (integration, requires
     });
   });
 
+  it('does not replace a wallet or deposit under concurrent requests', async () => {
+    const participant = deriveParticipantIdentity('postgres-ownership-race', 'secret');
+    const store1 = new PostgresEvaluationStore(pool, { id: () => 'challenge-ownership-1' });
+    const store2 = new PostgresEvaluationStore(pool, { id: () => 'challenge-ownership-2' });
+    await store1.enroll(participant.fullId, EVALUATION_CONSENT_VERSION);
+
+    const wallet1 = Keypair.random();
+    const wallet2 = Keypair.random();
+    const challenge1 = await store1.createChallenge(participant.fullId);
+    const challenge2 = await store2.createChallenge(participant.fullId);
+    const proof1 = {
+      challengeId: challenge1.id,
+      address: wallet1.publicKey(),
+      signature: wallet1.sign(buildSep53PayloadDigest(challenge1.message)).toString('base64'),
+      network: 'testnet' as const,
+    };
+    const proof2 = {
+      challengeId: challenge2.id,
+      address: wallet2.publicKey(),
+      signature: wallet2.sign(buildSep53PayloadDigest(challenge2.message)).toString('base64'),
+      network: 'testnet' as const,
+    };
+
+    const walletResults = await Promise.allSettled([
+      store1.verifyWallet(participant.fullId, proof1),
+      store2.verifyWallet(participant.fullId, proof2),
+    ]);
+    expect(walletResults.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(walletResults.filter((result) => result.status === 'rejected'))
+      .toEqual([expect.objectContaining({ reason: expect.objectContaining({ code: 'wallet_already_used' }) })]);
+
+    const depositResults = await Promise.allSettled([
+      store1.linkDeposit(participant.fullId, 'c'.repeat(64)),
+      store2.linkDeposit(participant.fullId, 'd'.repeat(64)),
+    ]);
+    expect(depositResults.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(depositResults.filter((result) => result.status === 'rejected'))
+      .toEqual([expect.objectContaining({ reason: expect.objectContaining({ code: 'deposit_already_used' }) })]);
+  });
+
   it('makes concurrent same-session checkout inserts ownership-safe', async () => {
     const participant = deriveParticipantIdentity('postgres-checkout-subject', 'secret');
     const other = deriveParticipantIdentity('postgres-checkout-other', 'secret');

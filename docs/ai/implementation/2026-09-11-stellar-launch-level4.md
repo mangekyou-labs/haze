@@ -6,9 +6,9 @@ description: Reconciled implementation notes for the evaluation milestone
 
 # Stellar Launch — Level 4 implementation record
 
-Date: 2026-09-11  
+Date: 2026-09-12
 Feature slug: `stellar-launch`  
-Status: implementation complete; final verification in progress
+Status: local implementation and verification complete; hosted acceptance pending
 
 This document is updated after each planned task. It records target-branch
 facts only; donor-worktree claims and stale screenshots are not evidence.
@@ -182,7 +182,7 @@ Fresh evidence:
 - Green: `cd web && npm test -- --run src/lib/analytics.test.ts src/lib/sentry-scrub.test.ts src/components/analytics-session-reset.test.ts src/app/api/evaluation/analytics/route.test.ts src/app/api/evaluation/routes.test.ts`
   passed (5 files, 13 tests).
 - `cd web && npm run typecheck` passed.
-- `cd web && npm run lint` passed with zero errors; seven pre-existing warnings
+- `cd web && npm run lint` passed with zero errors; six pre-existing warnings
   remain outside this task's new code.
 - `cd web && npm run build` passed with the target Sentry instrumentation.
 - `cd web && npm run test:e2e -- e2e/level4.spec.ts` passed (1 test), covering
@@ -221,7 +221,22 @@ Fresh evidence:
 - Web analytics regression tests passed after ensuring stale opt-in state
   cannot capture before initialization and a submitted survey emits once.
 
-T8 is active: run the fresh cross-package command matrix, reconcile every
-requirement against current code and launch-era regression tests, then perform
-the final review. Hosted deployment, cohort, fresh screenshots, and GitHub
-publication remain external acceptance gates until their credentials exist.
+### T8 — final verification and lifecycle reconciliation (complete locally)
+
+The clean Level 4 worktree passed the final cross-package verification matrix:
+
+- Gateway typecheck and full tests: 22 files, 196 tests passed, 16 skipped;
+  disposable Postgres migration/persistence/ownership/claim suite: 5 passed.
+- Web tests: 20 files, 60 tests; typecheck, lint (zero errors), production
+  build, and all 17 Playwright E2E tests passed.
+- Shared package (23 tests), sidecar (64 tests plus pack dry-run), fee sponsor
+  typecheck/tests, circuit suite, synthetic monitor, and Soroban `cargo +1.94`
+  suite (24 tests) passed.
+
+The final requirement audit confirms the exact consent and identity boundary,
+isolated migration/persistence, SEP-53/retention/ownership invariants,
+consent-gated billing retry behavior, telemetry privacy controls, synthetic CI
+wiring, and unchanged launch-era staged deposit/indexed-ticket behavior.
+`git diff --check` passed. Hosted deployment, cohort, fresh screenshots/video,
+telemetry exports, and GitHub publication remain external acceptance gates
+until their credentials and direct evidence exist.

@@ -6,9 +6,9 @@ description: Fresh verification evidence for the additive evaluation milestone
 
 # Stellar Launch — Level 4 verification record
 
-Date: 2026-09-11  
+Date: 2026-09-12
 Feature slug: `stellar-launch`  
-Status: fresh local execution in progress; hosted evidence pending
+Status: local verification complete; hosted evidence pending
 
 Only commands run in the clean Level 4 worktree may be recorded here. Donor
 claims, development screenshots, and stale lockfile results are excluded.
@@ -17,22 +17,25 @@ claims, development screenshots, and stale lockfile results are excluded.
 
 | Area | Command | Result |
 |---|---|---|
-| AI DevKit lint | `npx ai-devkit@latest lint --feature stellar-launch` | pending (CLI probe reported unknown command in this environment) |
-| Gateway | `cd ts && npm run typecheck` | pass (T1; shared package built first) |
-| Gateway tests | `cd ts && npm test` | pending |
-| Web tests/types/build/E2E | `cd web && npm test`, typecheck, build, E2E | pending |
-| Sidecar/shared | package checks | pending |
-| Fee sponsor | typecheck/tests | pending |
-| Circuits | circuit test suite | pending |
-| Soroban contract | `cargo test` | pending/toolchain-dependent |
+| AI DevKit lint | `npx ai-devkit@latest lint --feature stellar-launch` | unavailable: this environment's CLI reported `unknown command` |
+| Gateway typecheck/tests | `cd ts && npm run typecheck && npm test` | pass (22 files; 196 tests passed, 16 skipped) |
+| Disposable Postgres | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (5 tests; migration twice, persistence, concurrent ownership, claim/reclaim) |
+| Web tests | `cd web && npm test` | pass (20 files; 60 tests) |
+| Web typecheck/lint/build | `cd web && npm run typecheck && npm run lint && npm run build` | pass; lint 0 errors and 6 existing warnings; build pass |
+| Web E2E | `cd web && npm run test:e2e` | pass (17 tests) |
+| Shared package | `cd packages/zk-credits-shared && npm ci && npm run build && npm test` | pass (build; 23 tests) |
+| Sidecar package | `cd packages/zk-credits-sidecar && npm ci && npm run build && npm test && npm pack --dry-run` | pass (build; 64 tests; pack dry-run) |
+| Fee sponsor | `cd services/fee-sponsor && npm run typecheck && npm test` | pass (typecheck; 1 test) |
+| Circuits | `cd circuits && npm ci && node scripts/test.js` | pass (circuit, RLN, withdrawal, and slash suites) |
+| Soroban contract | `cd zk-credits-contract && cargo +1.94 test` | pass (24 tests; existing warnings only) |
 | Synthetic monitor | `node --test scripts/level4-synthetic.test.mjs`; `node --check scripts/level4-synthetic.mjs` | pass (3 tests) |
-| Whitespace | `git diff --check` | pending |
+| Whitespace | `git diff --check` | pass |
 
 ## T1 narrow evidence
 
 | Behavior | Command | Result |
 |---|---|---|
-| Identity, consent, SEP-53, expiry/replay, rate limits, ownership, feedback, retention, checkout, redacted evidence | `cd ts && npm test -- --run evaluation.test.ts` | pass (12 tests) |
+| Identity, consent, SEP-53, expiry/replay, rate limits, ownership, feedback, retention, checkout, redacted evidence | `cd ts && npm test -- --run evaluation.test.ts` | pass (13 tests) |
 | Migration ordering/isolation and schema registry | `cd ts && npm test -- --run db/migrate.test.ts db/config.test.ts` | pass (14 tests; 1 opt-in database test skipped) |
 
 The failing-first evidence for T1 is recorded in the implementation document;
@@ -43,7 +46,7 @@ implemented. No external deployment or cohort evidence is claimed.
 
 | Behavior | Command | Result |
 |---|---|---|
-| Postgres migration twice, restart durability, and concurrent checkout ownership | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (3 tests, disposable local cluster) |
+| Postgres migration twice, restart durability, and concurrent checkout/participant ownership | `RUN_DB_TESTS=1 TEST_DATABASE_URL=postgres://localhost:55432/postgres npm test -- --run evaluation-postgres.integration.test.ts` | pass (5 tests, disposable local cluster) |
 | Gateway lifecycle injection and evaluation adapter compile | `npm run typecheck` | pass |
 
 ## T3 narrow evidence
@@ -71,11 +74,11 @@ implemented. No external deployment or cohort evidence is claimed.
 
 | Behavior | Command | Result |
 |---|---|---|
-| Opt-in-only PostHog initialization, event/property allowlist, duration clamping, and logout reset | `cd web && npm test -- --run src/lib/analytics.test.ts src/components/analytics-session-reset.test.ts` | pass (5 tests) |
+| Opt-in-only PostHog initialization, event/property allowlist, duration clamping, and logout reset | `cd web && npm test -- --run src/lib/analytics.test.ts src/components/analytics-session-reset.test.ts` | pass (5 tests; the standalone analytics regression below adds 6 current assertions) |
 | Recursive browser Sentry scrub, including nested arrays and bounded depth | `cd web && npm test -- --run src/lib/sentry-scrub.test.ts` | pass (2 tests) |
 | Explicit analytics opt-in route and evaluation route regression | `cd web && npm test -- --run src/app/api/evaluation/analytics/route.test.ts src/app/api/evaluation/routes.test.ts` | pass (6 tests) |
 | Dashboard evaluation consent, wallet, checkout, and receipt UI | `cd web && npm run test:e2e -- e2e/level4.spec.ts` | pass (1 test; mocked gateway/Stripe/Freighter) |
-| Web type safety, lint, and production instrumentation build | `cd web && npm run typecheck`; `cd web && npm run lint`; `cd web && npm run build` | pass; lint has 0 errors and 7 pre-existing warnings |
+| Web type safety, lint, and production instrumentation build | `cd web && npm run typecheck`; `cd web && npm run lint`; `cd web && npm run build` | pass; lint has 0 errors and 6 pre-existing warnings |
 
 ## T7 narrow evidence
 
@@ -85,12 +88,21 @@ implemented. No external deployment or cohort evidence is claimed.
 | Dedicated retention purge authorization and bounded scheduler | `cd ts && npm test -- --run evaluation-routes.test.ts` | pass (7 tests) |
 | Fee-sponsor scrubber and Sentry service boundary | `cd services/fee-sponsor && npm test`; `cd services/fee-sponsor && npm run typecheck` | pass (1 test); pass |
 | Synthetic URL validation, bounded retry, three cold/warm labels, and redacted output | `node --test scripts/level4-synthetic.test.mjs`; `node --check scripts/level4-synthetic.mjs` | pass (3 tests) |
+| Browser analytics regression after privacy fixes | `cd web && npm test -- --run src/lib/analytics.test.ts` | pass (6 tests) |
 | CI wiring | `.github/workflows/ci.yml`, `.github/workflows/deploy-smoke.yml` inspected; exact variables and branch trigger present | pass (static review); hosted variables not available locally |
 
-The full T8 matrix must refresh the package-wide rows below. External release
-artifacts remain pending until deployment credentials, hosted URLs, Stripe
-test ingress, telemetry access, fresh screenshots, and ten distinct consenting
-participants are available.
+## T8 final reconciliation
+
+The package-wide rows above were run from the clean Level 4 worktree. The
+requirement audit confirms the exact consent version and participant ID shape,
+isolated migration `0009`, testnet-only SEP-53 proof rules, 90-day purge,
+unique wallet/deposit/session ownership, retryable checkout claims, filtered
+Stripe relay metadata, opt-in telemetry, recursive scrubbing, and preservation
+of the launch-era deposit and ticket-allocation path.
+
+External release artifacts remain pending until deployment credentials, hosted
+URLs, Stripe test ingress, telemetry access, fresh screenshots, and ten
+distinct consenting participants are available.
 
 ## Required behavior evidence
 

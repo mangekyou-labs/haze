@@ -1,8 +1,8 @@
 # Stellar Launch — Level 4 evidence index
 
-Snapshot: 2026-09-11  
+Snapshot: 2026-09-12
 Feature slug: `stellar-launch`  
-Status: local implementation in progress; release evidence pending
+Status: local implementation verified; release evidence pending
 
 This index is intentionally conservative. It will contain only fresh deployed
 links, consented cohort records, redacted exports, and current screenshots
@@ -36,7 +36,7 @@ must never be committed.
 
 ## Local verification
 
-Fresh local command results are recorded in
+Fresh local command results, including the final package-wide matrix, are recorded in
 [`docs/ai/testing/2026-09-11-stellar-launch-level4.md`](../../ai/testing/2026-09-11-stellar-launch-level4.md).
 The current local implementation also has fresh T4 evidence for atomic
 checkout claims and retryable billing in the testing record; it is not a
@@ -49,7 +49,8 @@ logout reset, browser Sentry scrubber, and target production build have fresh
 local evidence in the T6 testing record. The E2E uses mocked provider
 boundaries; it is not a hosted checkout, explorer, or telemetry artifact.
 T7 adds fresh local gateway/fee-sponsor Sentry tests, dedicated purge-route and
-scheduler tests, and synthetic monitor tests; it does not claim hosted
+scheduler tests, and synthetic monitor tests; T8 adds the final cross-package
+verification and persistence-race checks. None of these claims hosted
 synthetic passes or deployed telemetry.
 Until the external gates above are directly evidenced, this index must not
 state that Level 4 is releasable.

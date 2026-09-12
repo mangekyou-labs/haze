@@ -631,7 +631,7 @@ export class MemoryEvaluationStore implements EvaluationStore {
       enrolledAt: toIso(participant.enrolledAtMs),
       retentionDeadline: toIso(participant.retentionDeadlineMs),
       wallet: {
-        verified: participant.walletVerifiedAtMs !== null,
+        verified: participant.walletAddress !== null && participant.walletVerifiedAtMs !== null,
         addressRedacted: participant.walletAddress ? redactWalletAddress(participant.walletAddress) : null,
       },
       deposit: {
@@ -641,7 +641,8 @@ export class MemoryEvaluationStore implements EvaluationStore {
         newRoot: participant.depositNewRoot,
       },
       feedbackSubmitted: participant.feedback !== null,
-      complete: participant.walletVerifiedAtMs !== null
+      complete: participant.walletAddress !== null
+        && participant.walletVerifiedAtMs !== null
         && participant.depositConfirmedAtMs !== null
         && participant.feedback !== null,
     };

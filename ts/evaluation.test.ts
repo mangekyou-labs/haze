@@ -287,5 +287,9 @@ describe('evaluation feedback, checkout, and evidence', () => {
       walletSignature: null,
       anonymizedAtMs: now,
     }]);
+    await expect(store.getStatus(participant.fullId)).resolves.toMatchObject({
+      wallet: { verified: false, addressRedacted: null },
+      complete: false,
+    });
   });
 });

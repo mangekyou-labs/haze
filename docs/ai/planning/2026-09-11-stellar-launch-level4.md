@@ -10,7 +10,7 @@ Date: 2026-09-11
 Feature slug: `stellar-launch`  
 Branch: `feature-stellar-launch-level4`  
 Base: `1c17e14`  
-Status: in progress — T8 verification
+Status: local implementation verified; hosted acceptance pending
 
 ## Worktree and source boundary
 
@@ -30,7 +30,7 @@ its full diff and lockfiles are not applied.
 | T5 | Web server proxies, consent-gated checkout, receipt/status APIs | complete | route/unit tests; existing checkout tests |
 | T6 | Dashboard evaluation flow and privacy telemetry | complete | web unit/E2E; PostHog/Sentry scrub tests |
 | T7 | Fee-sponsor Sentry, synthetic CI, locks, operations/evidence docs | complete | service typecheck; workflow/script checks; docs audit |
-| T8 | Full verification and final review reconciliation | active | fresh command matrix and requirement audit |
+| T8 | Full verification and final review reconciliation | complete locally | fresh command matrix and requirement audit |
 
 ## Per-task workflow
 
